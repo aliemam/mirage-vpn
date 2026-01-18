@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Mirage VPN</string>
+    <string name="app_subtitle">Secure Internet Access</string>
+
+    <string name="connect">Connect</string>
+    <string name="disconnect">Disconnect</string>
+
+    <string name="status_disconnected">Disconnected</string>
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_disconnecting">Disconnecting…</string>
+    <string name="status_error">Error</string>
+    <string name="status_error_binary">Failed to initialize</string>
+    <string name="status_error_tunnel">Failed to establish tunnel</string>
+
+    <string name="vpn_permission_denied">VPN permission is required</string>
+
+    <string name="notification_channel_name">VPN Status</string>
+    <string name="notification_channel_desc">Shows VPN connection status</string>
+
+    <string name="info_text">Your connection is routed through encrypted DNS to bypass restrictions.</string>
+</resources>

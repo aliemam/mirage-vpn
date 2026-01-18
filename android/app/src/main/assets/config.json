@@ -1,0 +1,6 @@
+{
+  "dns_zone": "t.YOUR_DOMAIN.xyz",
+  "server_key": "YOUR_SERVER_KEY_HERE",
+  "doh_resolver": "https://cloudflare-dns.com/dns-query",
+  "server_name": "Mirage VPN"
+}
