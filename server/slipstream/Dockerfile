@@ -6,18 +6,19 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     git \
     build-essential \
+    clang \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
 RUN git clone https://github.com/Mygod/slipstream-rust.git .
-RUN cargo build --release
+RUN cargo build --release -p slipstream-server -p slipstream-client
 
 FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y \
     libssl3 \
     ca-certificates \
-    openssh-server \
+    openssl \
     dante-server \
     iptables \
     && rm -rf /var/lib/apt/lists/*
