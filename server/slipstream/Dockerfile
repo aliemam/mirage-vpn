@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /build
 RUN git clone --recursive https://github.com/EndPositive/slipstream.git .
-RUN meson setup builddir --buildtype=release
+RUN meson setup builddir --buildtype=release -Dwerror=false
 RUN meson compile -C builddir
 
 FROM debian:bookworm-slim
