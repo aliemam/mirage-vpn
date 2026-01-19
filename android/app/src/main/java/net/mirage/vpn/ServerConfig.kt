@@ -13,7 +13,10 @@ data class ServerConfig(
     val resolvers: List<String>,  // DNS resolvers (non-Iranian!)
     val listenPort: Int = 5201,   // Local TCP proxy port
     val serverName: String = "Mirage VPN",
-    val currentDomainIndex: Int = 0  // Track which domain we're using
+    val currentDomainIndex: Int = 0,  // Track which domain we're using
+    val useDoH: Boolean = false,   // Use DNS over HTTPS (harder to detect) - disabled by default for stability
+    val dohPort: Int = 5353,      // Local DoH proxy port
+    val dohEndpoints: List<String> = DEFAULT_DOH_ENDPOINTS  // DoH servers
 ) {
     // For backward compatibility
     val domain: String get() = domains.getOrElse(currentDomainIndex) { domains.first() }
@@ -21,6 +24,14 @@ data class ServerConfig(
     companion object {
         private const val CONFIG_FILE = "server_config.json"
         private const val ASSETS_CONFIG = "config.json"
+
+        // DoH endpoints - traffic looks like normal HTTPS to these domains
+        val DEFAULT_DOH_ENDPOINTS = listOf(
+            "https://cloudflare-dns.com/dns-query",
+            "https://dns.google/dns-query",
+            "https://dns.quad9.net/dns-query",
+            "https://doh.opendns.com/dns-query",
+        )
 
         // Default domains - add your backup domains here
         private val DEFAULT_DOMAINS = listOf(
@@ -101,12 +112,23 @@ data class ServerConfig(
                 DEFAULT_RESOLVERS
             }
 
+            // Parse DoH endpoints
+            val dohEndpointsArray = obj.optJSONArray("doh_endpoints")
+            val dohEndpoints = if (dohEndpointsArray != null) {
+                (0 until dohEndpointsArray.length()).map { dohEndpointsArray.getString(it) }
+            } else {
+                DEFAULT_DOH_ENDPOINTS
+            }
+
             return ServerConfig(
                 domains = domains,
                 resolvers = resolvers,
                 listenPort = obj.optInt("listen_port", 5201),
                 serverName = obj.optString("server_name", "Mirage VPN"),
-                currentDomainIndex = obj.optInt("current_domain_index", 0)
+                currentDomainIndex = obj.optInt("current_domain_index", 0),
+                useDoH = obj.optBoolean("use_doh", true),
+                dohPort = obj.optInt("doh_port", 5353),
+                dohEndpoints = dohEndpoints
             )
         }
     }
@@ -127,6 +149,9 @@ data class ServerConfig(
             put("listen_port", listenPort)
             put("server_name", serverName)
             put("current_domain_index", currentDomainIndex)
+            put("use_doh", useDoH)
+            put("doh_port", dohPort)
+            put("doh_endpoints", org.json.JSONArray(dohEndpoints))
         }.toString(2)
     }
 }

@@ -172,6 +172,88 @@ ns1  IN    A     77.42.23.165
 
 The `s` subdomain is delegated to your VPS, which runs slipstream-server as the authoritative DNS.
 
+## Anti-Detection Mechanisms
+
+### 1. Decoy DNS Queries (Traffic Camouflage)
+
+The app sends fake DNS queries to popular Iranian websites to make traffic look normal:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           What ISP/DPI Sees                                  │
+│                                                                              │
+│   Timeline of DNS queries from the device:                                   │
+│                                                                              │
+│   09:00:01  DNS → 1.1.1.1: xyz123.s.savethenameofthekillers.com  (tunnel)   │
+│   09:00:03  DNS → 8.8.8.8: digikala.com                          (DECOY)    │
+│   09:00:05  DNS → 1.1.1.1: abc456.s.savethenameofthekillers.com  (tunnel)   │
+│   09:00:08  DNS → 9.9.9.9: aparat.com                            (DECOY)    │
+│   09:00:09  DNS → 8.8.8.8: def789.s.savethenameofthekillers.com  (tunnel)   │
+│   09:00:15  DNS → 1.1.1.1: varzesh3.com                          (DECOY)    │
+│                                                                              │
+│   Tunnel traffic is mixed with normal Iranian website queries!               │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**How it works:**
+1. Every 2-10 seconds (random interval), a decoy DNS query is sent
+2. Domains are popular Iranian sites: digikala.com, aparat.com, divar.ir, etc.
+3. Queries go through the SAME resolvers as tunnel traffic (1.1.1.1, 8.8.8.8)
+4. Socket is "protected" so decoys bypass VPN (sent directly, not through tunnel)
+
+**Why Iranian sites:**
+- If only foreign sites were queried, traffic looks suspicious
+- Queries to digikala.com, varzesh3.com look like normal Iranian browsing
+- These sites are NOT blocked in Iran
+
+**Code location:** `MirageVpnService.kt` - `startDecoyDns()`, `sendDecoyDnsQuery()`
+
+### 2. DNS over HTTPS (DoH) - Optional
+
+When enabled, DNS queries are sent via HTTPS instead of UDP/53:
+
+```
+Standard DNS (default):
+  slipstream → UDP:53 → 1.1.1.1 → VPS
+
+With DoH enabled:
+  slipstream → 127.0.0.1:5353 → DoH Proxy → HTTPS:443 → cloudflare-dns.com → VPS
+```
+
+**Advantage:** Traffic looks like normal HTTPS to Cloudflare, not DNS queries.
+
+**Disadvantage:** Extra latency, more complexity.
+
+**Configuration:** Set `use_doh: true` in config.json (disabled by default).
+
+**Code location:** `DohProxy.kt`, `MirageVpnService.kt`
+
+### 3. Multi-Domain Failover
+
+If the primary domain is blocked, the app tries backup domains:
+
+```kotlin
+domains: [
+  "s.savethenameofthekillers.com",   // Primary
+  "t.backup-domain-1.com",            // Backup 1
+  "d.backup-domain-2.net",            // Backup 2
+]
+```
+
+### 4. Multi-Resolver Support
+
+Uses 10+ international DNS resolvers (non-Iranian):
+
+```kotlin
+resolvers: [
+  "1.1.1.1",          // Cloudflare
+  "8.8.8.8",          // Google
+  "9.9.9.9",          // Quad9
+  "208.67.222.222",   // OpenDNS
+  // ... and more
+]
+```
+
 ## Security Considerations
 
 ### What's Encrypted
@@ -183,6 +265,11 @@ The `s` subdomain is delegated to your VPS, which runs slipstream-server as the 
 - DNS queries to 1.1.1.1, 8.8.8.8, 9.9.9.9
 - Query names like `*.s.savethenameofthekillers.com`
 - Query/response sizes and timing patterns
+- **With decoys:** Also sees normal Iranian website queries mixed in
+
+### What's Hidden
+- With DoH: DNS queries look like HTTPS traffic
+- With decoys: Tunnel traffic pattern is obscured
 
 ## File Structure
 
@@ -191,20 +278,43 @@ android/
 ├── app/src/main/
 │   ├── java/net/mirage/vpn/
 │   │   ├── MainActivity.kt        # UI
-│   │   ├── MirageVpnService.kt    # VPN service orchestrator
+│   │   ├── MirageVpnService.kt    # VPN service + decoy DNS
 │   │   ├── TunnelNative.kt        # JNI wrapper for tun2socks
-│   │   └── ServerConfig.kt        # Configuration management
+│   │   ├── ServerConfig.kt        # Configuration management
+│   │   └── DohProxy.kt            # DNS over HTTPS proxy (optional)
 │   ├── jni/
 │   │   ├── hev-socks5-tunnel/     # tun2socks native library
 │   │   ├── Android.mk
 │   │   └── Application.mk
-│   └── jniLibs/arm64-v8a/
-│       └── libslipstream.so       # Pre-compiled slipstream client
+│   ├── jniLibs/arm64-v8a/
+│   │   └── libslipstream.so       # Pre-compiled slipstream client
+│   └── assets/
+│       └── config.json            # Default configuration
+```
+
+## Configuration
+
+Configuration is stored in `config.json`:
+
+```json
+{
+  "domains": ["s.savethenameofthekillers.com"],
+  "resolvers": ["1.1.1.1", "8.8.8.8", "9.9.9.9", ...],
+  "listen_port": 5201,
+  "server_name": "Mirage VPN - Iran",
+  "use_doh": false,
+  "doh_port": 5353,
+  "doh_endpoints": [
+    "https://cloudflare-dns.com/dns-query",
+    "https://dns.google/dns-query"
+  ]
+}
 ```
 
 ## Build Requirements
 
 - Android NDK (for native libraries)
-- JDK 17
-- Gradle 8.x
+- JDK 17+
+- Gradle 8.7+
+- AGP 8.5+
 - Target: Android API 24+ (arm64-v8a)

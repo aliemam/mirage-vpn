@@ -44,6 +44,7 @@ class MirageVpnService : VpnService() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private lateinit var config: ServerConfig
     private var decoyJob: Job? = null
+    private var dohProxy: DohProxy? = null
 
     // Popular domains for decoy DNS queries - makes traffic look normal
     // These are domains Iranians commonly visit (mostly Iranian sites)
@@ -101,10 +102,19 @@ class MirageVpnService : VpnService() {
         try {
             sendStatus(getString(R.string.status_connecting), false)
 
+            // Start DoH proxy if enabled (makes DNS traffic look like HTTPS)
+            if (config.useDoH) {
+                Log.d(TAG, "Starting DoH proxy on port ${config.dohPort}")
+                dohProxy = DohProxy(config.dohPort, config.dohEndpoints)
+                dohProxy?.start()
+                delay(500) // Give proxy time to start
+            }
+
             // Extract and prepare the tunnel binary
             val binaryPath = extractBinary()
             if (binaryPath == null) {
                 sendStatus(getString(R.string.status_error_binary), false)
+                dohProxy?.stop()
                 stopSelf()
                 return
             }
@@ -146,6 +156,7 @@ class MirageVpnService : VpnService() {
 
             if (!connected) {
                 sendStatus(getString(R.string.status_error_tunnel), false)
+                dohProxy?.stop()
                 stopSelf()
                 return
             }
@@ -204,10 +215,19 @@ class MirageVpnService : VpnService() {
             "--tcp-listen-port", config.listenPort.toString()
         )
 
-        // Add all resolvers
-        for (resolver in config.resolvers) {
+        // When DoH is enabled, route through local DoH proxy
+        // Otherwise use direct resolvers
+        if (config.useDoH) {
+            // Use local DoH proxy - traffic will look like HTTPS
             cmd.add("--resolver")
-            cmd.add(resolver)
+            cmd.add("127.0.0.1:${config.dohPort}")
+            Log.d(TAG, "Using DoH proxy at 127.0.0.1:${config.dohPort}")
+        } else {
+            // Add all direct resolvers (standard DNS on port 53)
+            for (resolver in config.resolvers) {
+                cmd.add("--resolver")
+                cmd.add(resolver)
+            }
         }
 
         Log.d(TAG, "Starting tunnel: ${cmd.joinToString(" ")}")
@@ -313,6 +333,10 @@ class MirageVpnService : VpnService() {
             tunnelProcess?.destroy()
             tunnelProcess = null
 
+            // Stop DoH proxy
+            dohProxy?.stop()
+            dohProxy = null
+
             vpnInterface?.close()
             vpnInterface = null
         }
@@ -375,6 +399,8 @@ class MirageVpnService : VpnService() {
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping tun2socks in onDestroy", e)
         }
+        dohProxy?.stop()
+        dohProxy = null
         tunnelProcess?.destroy()
         vpnInterface?.close()
         isRunning = false
