@@ -13,7 +13,10 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /build
 RUN git clone --recursive https://github.com/EndPositive/slipstream.git .
-RUN meson setup builddir --buildtype=release -Dwerror=false
+# Disable werror in meson.build
+RUN sed -i "s/werror=true/werror=false/g" meson.build || true
+RUN sed -i "s/'werror', true/'werror', false/g" meson.build || true
+RUN meson setup builddir --buildtype=release --warnlevel=0
 RUN meson compile -C builddir
 
 FROM debian:bookworm-slim
