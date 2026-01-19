@@ -6,17 +6,55 @@ import java.io.File
 
 /**
  * Server configuration for the slipstream DNS tunnel.
- * Can be loaded from assets or updated via QR code/deep link.
+ * Supports multiple domains for failover and extensive resolver list.
  */
 data class ServerConfig(
-    val domain: String,           // Slipstream domain (e.g., s.savethenameofthekillers.com)
-    val resolvers: List<String>,  // DNS resolvers (e.g., 1.1.1.1, 8.8.8.8)
+    val domains: List<String>,    // Multiple domains for failover
+    val resolvers: List<String>,  // DNS resolvers (non-Iranian!)
     val listenPort: Int = 5201,   // Local TCP proxy port
-    val serverName: String = "Mirage VPN"
+    val serverName: String = "Mirage VPN",
+    val currentDomainIndex: Int = 0  // Track which domain we're using
 ) {
+    // For backward compatibility
+    val domain: String get() = domains.getOrElse(currentDomainIndex) { domains.first() }
+
     companion object {
         private const val CONFIG_FILE = "server_config.json"
         private const val ASSETS_CONFIG = "config.json"
+
+        // Default domains - add your backup domains here
+        private val DEFAULT_DOMAINS = listOf(
+            "s.savethenameofthekillers.com"
+            // Add backup domains as you register them:
+            // "t.backup-domain-1.com",
+            // "d.backup-domain-2.net",
+        )
+
+        // Safe DNS resolvers - NOT controlled by Iranian government
+        // These are all international resolvers that Iran cannot manipulate
+        private val DEFAULT_RESOLVERS = listOf(
+            // Cloudflare - Fast, privacy-focused
+            "1.1.1.1",
+            "1.0.0.1",
+            // Google - Reliable, widely used
+            "8.8.8.8",
+            "8.8.4.4",
+            // Quad9 - Security-focused, blocks malware
+            "9.9.9.9",
+            "149.112.112.112",
+            // OpenDNS - Cisco owned
+            "208.67.222.222",
+            "208.67.220.220",
+            // AdGuard DNS
+            "94.140.14.14",
+            "94.140.15.15",
+            // CleanBrowsing
+            "185.228.168.9",
+            "185.228.169.9",
+            // Comodo Secure DNS
+            "8.26.56.26",
+            "8.20.247.20",
+        )
 
         fun load(context: Context): ServerConfig {
             // First try to load from internal storage (user-updated config)
@@ -30,10 +68,10 @@ data class ServerConfig(
                 val json = context.assets.open(ASSETS_CONFIG).bufferedReader().readText()
                 fromJson(json)
             } catch (e: Exception) {
-                // Return default config for slipstream
+                // Return default config
                 ServerConfig(
-                    domain = "s.savethenameofthekillers.com",
-                    resolvers = listOf("1.1.1.1", "8.8.8.8")
+                    domains = DEFAULT_DOMAINS,
+                    resolvers = DEFAULT_RESOLVERS
                 )
             }
         }
@@ -45,27 +83,50 @@ data class ServerConfig(
 
         private fun fromJson(json: String): ServerConfig {
             val obj = JSONObject(json)
+
+            // Support both old "domain" (single) and new "domains" (list) format
+            val domains = when {
+                obj.has("domains") -> {
+                    val arr = obj.getJSONArray("domains")
+                    (0 until arr.length()).map { arr.getString(it) }
+                }
+                obj.has("domain") -> listOf(obj.getString("domain"))
+                else -> DEFAULT_DOMAINS
+            }
+
             val resolversArray = obj.optJSONArray("resolvers")
             val resolvers = if (resolversArray != null) {
                 (0 until resolversArray.length()).map { resolversArray.getString(it) }
             } else {
-                listOf("1.1.1.1", "8.8.8.8")
+                DEFAULT_RESOLVERS
             }
+
             return ServerConfig(
-                domain = obj.getString("domain"),
+                domains = domains,
                 resolvers = resolvers,
                 listenPort = obj.optInt("listen_port", 5201),
-                serverName = obj.optString("server_name", "Mirage VPN")
+                serverName = obj.optString("server_name", "Mirage VPN"),
+                currentDomainIndex = obj.optInt("current_domain_index", 0)
             )
         }
     }
 
+    /** Get next domain to try after current one fails */
+    fun nextDomain(): ServerConfig {
+        val nextIndex = (currentDomainIndex + 1) % domains.size
+        return copy(currentDomainIndex = nextIndex)
+    }
+
+    /** Check if we've tried all domains */
+    fun hasMoreDomains(): Boolean = currentDomainIndex < domains.size - 1
+
     fun toJson(): String {
         return JSONObject().apply {
-            put("domain", domain)
+            put("domains", org.json.JSONArray(domains))
             put("resolvers", org.json.JSONArray(resolvers))
             put("listen_port", listenPort)
             put("server_name", serverName)
+            put("current_domain_index", currentDomainIndex)
         }.toString(2)
     }
 }

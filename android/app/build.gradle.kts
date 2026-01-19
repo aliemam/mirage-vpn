@@ -15,7 +15,22 @@ android {
         versionName = "1.0.0"
 
         ndk {
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+            abiFilters += listOf("arm64-v8a")
+        }
+
+        externalNativeBuild {
+            ndkBuild {
+                arguments += listOf(
+                    "APP_PLATFORM=android-24",
+                    "APP_CFLAGS=-DPKGNAME=net/mirage/vpn -DCLSNAME=TunnelNative"
+                )
+            }
+        }
+    }
+
+    externalNativeBuild {
+        ndkBuild {
+            path = file("src/main/jni/Android.mk")
         }
     }
 
@@ -41,6 +56,12 @@ android {
     buildFeatures {
         viewBinding = true
         buildConfig = true
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 }
 
