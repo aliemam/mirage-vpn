@@ -1,4 +1,4 @@
-FROM rust:nightly-slim-bookworm AS builder
+FROM rust:nightly AS builder
 
 RUN apt-get update && apt-get install -y \
     cmake \
