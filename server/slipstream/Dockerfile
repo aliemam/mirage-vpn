@@ -1,17 +1,20 @@
-FROM rust:nightly AS builder
+FROM debian:bookworm-slim AS builder
 
 RUN apt-get update && apt-get install -y \
+    meson \
+    ninja-build \
     cmake \
     pkg-config \
     libssl-dev \
     git \
     build-essential \
-    clang \
+    python3 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-RUN git clone --recursive https://github.com/Mygod/slipstream-rust.git .
-RUN cargo build --release -p slipstream-server -p slipstream-client
+RUN git clone --recursive https://github.com/EndPositive/slipstream.git .
+RUN meson setup builddir --buildtype=release
+RUN meson compile -C builddir
 
 FROM debian:bookworm-slim
 
@@ -20,11 +23,10 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     openssl \
     dante-server \
-    iptables \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/target/release/slipstream-server /usr/local/bin/
-COPY --from=builder /build/target/release/slipstream-client /usr/local/bin/
+COPY --from=builder /build/builddir/slipstream-server /usr/local/bin/
+COPY --from=builder /build/builddir/slipstream-client /usr/local/bin/
 COPY entrypoint.sh /entrypoint.sh
 COPY danted.conf /etc/danted.conf
 RUN chmod +x /entrypoint.sh
