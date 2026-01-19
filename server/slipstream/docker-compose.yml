@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   slipstream:
-    build: .
+    image: slipstream-server:latest
     container_name: slipstream-server
     restart: unless-stopped
     network_mode: host  # Required for iptables port forwarding
