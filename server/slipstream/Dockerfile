@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-RUN git clone https://github.com/Mygod/slipstream-rust.git .
+RUN git clone --recursive https://github.com/Mygod/slipstream-rust.git .
 RUN cargo build --release -p slipstream-server -p slipstream-client
 
 FROM debian:bookworm-slim
