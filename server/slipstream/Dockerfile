@@ -16,6 +16,10 @@ RUN git clone --recursive https://github.com/EndPositive/slipstream.git .
 # Disable werror in meson.build
 RUN sed -i "s/werror=true/werror=false/g" meson.build || true
 RUN sed -i "s/'werror', true/'werror', false/g" meson.build || true
+
+# Fix missing picotls dependencies - add explicit picotls libraries to link
+RUN sed -i "s/picoquic_proj.dependency('picoquic-core'),/picoquic_proj.dependency('picoquic-core'),\\n  picoquic_proj.dependency('picotls-core'),\\n  picoquic_proj.dependency('picotls-openssl'),\\n  picoquic_proj.dependency('picotls-minicrypto'),/g" meson.build
+
 RUN meson setup builddir --buildtype=release --warnlevel=0
 RUN meson compile -C builddir
 
