@@ -14,7 +14,7 @@ data class ServerConfig(
     val listenPort: Int = 5201,   // Local TCP proxy port
     val serverName: String = "Mirage VPN",
     val currentDomainIndex: Int = 0,  // Track which domain we're using
-    val useDoH: Boolean = false,   // Use DNS over HTTPS (harder to detect) - disabled by default for stability
+    val useDoH: Boolean = true,   // Use DNS over HTTPS with IP donors (chatgpt.com, etc.) - enabled by default
     val dohPort: Int = 5353,      // Local DoH proxy port
     val dohEndpoints: List<String> = DEFAULT_DOH_ENDPOINTS  // DoH servers
 ) {
