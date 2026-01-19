@@ -9,7 +9,7 @@ services:
     cap_add:
       - NET_ADMIN
     environment:
-      - SLIPSTREAM_DOMAIN=${SLIPSTREAM_DOMAIN:-s.aemirage.ddns.net}
+      - SLIPSTREAM_DOMAIN=${SLIPSTREAM_DOMAIN:-s.savethenameofthekillers.com}
     volumes:
       - ./keys:/keys
     logging:
