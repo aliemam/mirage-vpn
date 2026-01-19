@@ -1,9 +1,5 @@
 FROM debian:bookworm-slim AS builder
 
-# Configure DNS for build environment
-RUN echo "nameserver 8.8.8.8" > /etc/resolv.conf && \
-    echo "nameserver 1.1.1.1" >> /etc/resolv.conf
-
 RUN apt-get update && apt-get install -y \
     meson \
     ninja-build \
@@ -24,10 +20,6 @@ RUN meson setup builddir --buildtype=release --warnlevel=0
 RUN meson compile -C builddir
 
 FROM debian:bookworm-slim
-
-# Configure DNS for build environment
-RUN echo "nameserver 8.8.8.8" > /etc/resolv.conf && \
-    echo "nameserver 1.1.1.1" >> /etc/resolv.conf
 
 RUN apt-get update && apt-get install -y \
     libssl3 \
