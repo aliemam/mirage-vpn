@@ -122,16 +122,19 @@ class MirageVpnService : VpnService() {
     }
 
     private fun startTunnelClient(binaryPath: String) {
-        val protectFd = { fd: Int -> protect(fd) }
-
         // Build command for slipstream client
-        val cmd = listOf(
+        // slipstream-client --resolver <ip> --domain <domain> --tcp-listen-port <port>
+        val cmd = mutableListOf(
             binaryPath,
-            "--resolver", config.dohResolver,
-            "--dns-zone", config.dnsZone,
-            "--key", config.serverKey,
-            "--socks-listen", "127.0.0.1:1080"
+            "--domain", config.domain,
+            "--tcp-listen-port", config.listenPort.toString()
         )
+
+        // Add all resolvers
+        for (resolver in config.resolvers) {
+            cmd.add("--resolver")
+            cmd.add(resolver)
+        }
 
         Log.d(TAG, "Starting tunnel: ${cmd.joinToString(" ")}")
 
@@ -152,7 +155,7 @@ class MirageVpnService : VpnService() {
     private fun isTunnelAlive(): Boolean {
         return try {
             Socket().use { socket ->
-                socket.connect(InetSocketAddress("127.0.0.1", 1080), 1000)
+                socket.connect(InetSocketAddress("127.0.0.1", config.listenPort), 1000)
                 true
             }
         } catch (e: Exception) {

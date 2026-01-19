@@ -5,13 +5,13 @@ import org.json.JSONObject
 import java.io.File
 
 /**
- * Server configuration for the DNS tunnel.
+ * Server configuration for the slipstream DNS tunnel.
  * Can be loaded from assets or updated via QR code/deep link.
  */
 data class ServerConfig(
-    val dnsZone: String,
-    val serverKey: String,
-    val dohResolver: String = "https://cloudflare-dns.com/dns-query",
+    val domain: String,           // Slipstream domain (e.g., s.savethenameofthekillers.com)
+    val resolvers: List<String>,  // DNS resolvers (e.g., 1.1.1.1, 8.8.8.8)
+    val listenPort: Int = 5201,   // Local TCP proxy port
     val serverName: String = "Mirage VPN"
 ) {
     companion object {
@@ -30,10 +30,10 @@ data class ServerConfig(
                 val json = context.assets.open(ASSETS_CONFIG).bufferedReader().readText()
                 fromJson(json)
             } catch (e: Exception) {
-                // Return default config if nothing found
+                // Return default config for slipstream
                 ServerConfig(
-                    dnsZone = "t.example.com",
-                    serverKey = "YOUR_SERVER_KEY_HERE"
+                    domain = "s.savethenameofthekillers.com",
+                    resolvers = listOf("1.1.1.1", "8.8.8.8")
                 )
             }
         }
@@ -45,10 +45,16 @@ data class ServerConfig(
 
         private fun fromJson(json: String): ServerConfig {
             val obj = JSONObject(json)
+            val resolversArray = obj.optJSONArray("resolvers")
+            val resolvers = if (resolversArray != null) {
+                (0 until resolversArray.length()).map { resolversArray.getString(it) }
+            } else {
+                listOf("1.1.1.1", "8.8.8.8")
+            }
             return ServerConfig(
-                dnsZone = obj.getString("dns_zone"),
-                serverKey = obj.getString("server_key"),
-                dohResolver = obj.optString("doh_resolver", "https://cloudflare-dns.com/dns-query"),
+                domain = obj.getString("domain"),
+                resolvers = resolvers,
+                listenPort = obj.optInt("listen_port", 5201),
                 serverName = obj.optString("server_name", "Mirage VPN")
             )
         }
@@ -56,9 +62,9 @@ data class ServerConfig(
 
     fun toJson(): String {
         return JSONObject().apply {
-            put("dns_zone", dnsZone)
-            put("server_key", serverKey)
-            put("doh_resolver", dohResolver)
+            put("domain", domain)
+            put("resolvers", org.json.JSONArray(resolvers))
+            put("listen_port", listenPort)
             put("server_name", serverName)
         }.toString(2)
     }

@@ -1,0 +1,35 @@
+FROM debian:bookworm-slim AS builder
+
+RUN apt-get update && apt-get install -y \
+    meson \
+    ninja-build \
+    cmake \
+    pkg-config \
+    libssl-dev \
+    git \
+    build-essential \
+    python3 \
+    musl-dev \
+    musl-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+RUN git clone --recursive https://github.com/EndPositive/slipstream.git .
+
+# Disable werror in meson.build
+RUN sed -i "s/werror=true/werror=false/g" meson.build || true
+RUN sed -i "s/'werror', true/'werror', false/g" meson.build || true
+
+# Fix missing picotls dependencies
+RUN sed -i "s/picoquic_proj.dependency('picoquic-core'),/picoquic_proj.dependency('picoquic-core'),\\n  picoquic_proj.dependency('picotls-core'),\\n  picoquic_proj.dependency('picotls-openssl'),\\n  picoquic_proj.dependency('picotls-minicrypto'),/g" meson.build
+
+# Build with static linking
+RUN meson setup builddir --buildtype=release --warnlevel=0 --default-library=static -Db_staticpic=true
+RUN meson compile -C builddir
+
+# Check if it worked
+RUN file builddir/slipstream-client && ldd builddir/slipstream-client || echo "Not dynamically linked"
+
+FROM scratch
+COPY --from=builder /build/builddir/slipstream-client /slipstream-client
+COPY --from=builder /build/builddir/slipstream-server /slipstream-server
