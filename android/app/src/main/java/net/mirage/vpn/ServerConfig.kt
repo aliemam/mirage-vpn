@@ -5,6 +5,15 @@ import org.json.JSONObject
 import java.io.File
 
 /**
+ * Tunnel mode options
+ */
+enum class TunnelMode {
+    DNS,    // DNS tunneling via slipstream (original method)
+    VLESS,  // VLESS + WebSocket + TLS via Cloudflare (domain fronting)
+    AUTO    // Try VLESS first, fall back to DNS
+}
+
+/**
  * Server configuration for the slipstream DNS tunnel.
  * Supports multiple domains for failover and extensive resolver list.
  */
@@ -14,9 +23,12 @@ data class ServerConfig(
     val listenPort: Int = 5201,   // Local TCP proxy port
     val serverName: String = "Mirage VPN",
     val currentDomainIndex: Int = 0,  // Track which domain we're using
-    val useDoH: Boolean = false,   // DoH with IP donors needs SNI fix - disabled for now
+    val useDoH: Boolean = true,   // DoH with IP donors and proper SNI - enabled by default
     val dohPort: Int = 5353,      // Local DoH proxy port
-    val dohEndpoints: List<String> = DEFAULT_DOH_ENDPOINTS  // DoH servers
+    val dohEndpoints: List<String> = DEFAULT_DOH_ENDPOINTS,  // DoH servers
+    val tunnelMode: TunnelMode = TunnelMode.VLESS,  // VLESS by default (more reliable in Iran)
+    val vlessSocksPort: Int = 10808,  // VLESS local SOCKS port
+    val remoteConfigUrl: String = "https://aemirage.ddns.net/configs.txt"
 ) {
     // For backward compatibility
     val domain: String get() = domains.getOrElse(currentDomainIndex) { domains.first() }
@@ -120,6 +132,14 @@ data class ServerConfig(
                 DEFAULT_DOH_ENDPOINTS
             }
 
+            // Parse tunnel mode
+            val tunnelModeStr = obj.optString("tunnel_mode", "VLESS")
+            val tunnelMode = try {
+                TunnelMode.valueOf(tunnelModeStr.uppercase())
+            } catch (e: Exception) {
+                TunnelMode.VLESS
+            }
+
             return ServerConfig(
                 domains = domains,
                 resolvers = resolvers,
@@ -128,7 +148,10 @@ data class ServerConfig(
                 currentDomainIndex = obj.optInt("current_domain_index", 0),
                 useDoH = obj.optBoolean("use_doh", true),
                 dohPort = obj.optInt("doh_port", 5353),
-                dohEndpoints = dohEndpoints
+                dohEndpoints = dohEndpoints,
+                tunnelMode = tunnelMode,
+                vlessSocksPort = obj.optInt("vless_socks_port", 10808),
+                remoteConfigUrl = obj.optString("remote_config_url", "https://aemirage.ddns.net/configs.txt")
             )
         }
     }
@@ -152,6 +175,9 @@ data class ServerConfig(
             put("use_doh", useDoH)
             put("doh_port", dohPort)
             put("doh_endpoints", org.json.JSONArray(dohEndpoints))
+            put("tunnel_mode", tunnelMode.name)
+            put("vless_socks_port", vlessSocksPort)
+            put("remote_config_url", remoteConfigUrl)
         }.toString(2)
     }
 }

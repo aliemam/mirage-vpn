@@ -5,6 +5,10 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
@@ -28,11 +32,21 @@ class MirageVpnService : VpnService() {
         const val ACTION_CONNECT = "net.mirage.vpn.CONNECT"
         const val ACTION_DISCONNECT = "net.mirage.vpn.DISCONNECT"
         const val ACTION_STATUS_UPDATE = "net.mirage.vpn.STATUS_UPDATE"
+        const val ACTION_PROBE_PROGRESS = "net.mirage.vpn.PROBE_PROGRESS"
         const val EXTRA_STATUS = "status"
         const val EXTRA_CONNECTED = "connected"
+        const val EXTRA_PROBE_CURRENT = "probe_current"
+        const val EXTRA_PROBE_TOTAL = "probe_total"
+        const val EXTRA_PROBE_SNI = "probe_sni"
 
         private const val NOTIFICATION_CHANNEL_ID = "mirage_vpn_channel"
         private const val NOTIFICATION_ID = 1
+
+        // Health monitor constants
+        private const val HEALTH_CHECK_INTERVAL_MS = 15_000L
+        private const val MAX_RECONNECT_ATTEMPTS = 5
+        private val BACKOFF_DELAYS_MS = longArrayOf(2_000, 5_000, 10_000, 20_000, 30_000)
+        private const val NETWORK_STABILIZE_DELAY_MS = 2_000L
 
         @Volatile
         var isRunning = false
@@ -45,6 +59,22 @@ class MirageVpnService : VpnService() {
     private lateinit var config: ServerConfig
     private var decoyJob: Job? = null
     private var dohProxy: DohProxy? = null
+    private var xrayManager: XrayManager? = null
+    private var activeTunnelMode: TunnelMode = TunnelMode.DNS
+    private var activeSocksPort: Int = 5201
+
+    // Health monitor & reconnection state
+    private var healthMonitorJob: Job? = null
+    private var reconnectAttempts = 0
+    private var isReconnecting = false
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
+
+    // Background optimizer
+    private var backgroundOptimizer: BackgroundOptimizer? = null
+
+    // Dynamic config scoring and repository
+    private var scoreManager: ConfigScoreManager? = null
+    private var configRepository: ConfigRepository? = null
 
     // Popular domains for decoy DNS queries - makes traffic look normal
     // These are domains Iranians commonly visit (mostly Iranian sites)
@@ -83,6 +113,8 @@ class MirageVpnService : VpnService() {
         super.onCreate()
         createNotificationChannel()
         config = ServerConfig.load(this)
+        scoreManager = ConfigScoreManager(this)
+        configRepository = ConfigRepository(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -98,65 +130,48 @@ class MirageVpnService : VpnService() {
         return START_STICKY
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        if (isRunning) {
+            Log.i(TAG, "App swiped away while connected, restarting service")
+            val restartIntent = Intent(this, MirageVpnService::class.java).apply {
+                action = ACTION_CONNECT
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(restartIntent)
+            } else {
+                startService(restartIntent)
+            }
+        }
+    }
+
     private suspend fun connect() {
         try {
             sendStatus(getString(R.string.status_connecting), false)
 
-            // Start DoH proxy if enabled (makes DNS traffic look like HTTPS)
-            if (config.useDoH) {
-                Log.d(TAG, "Starting DoH proxy on port ${config.dohPort}")
-                dohProxy = DohProxy(config.dohPort, config.dohEndpoints)
-                dohProxy?.start()
-                delay(500) // Give proxy time to start
+            // Determine which tunnel mode to use
+            val modeToTry = when (config.tunnelMode) {
+                TunnelMode.AUTO -> TunnelMode.VLESS // Try VLESS first in AUTO mode
+                else -> config.tunnelMode
             }
 
-            // Extract and prepare the tunnel binary
-            val binaryPath = extractBinary()
-            if (binaryPath == null) {
-                sendStatus(getString(R.string.status_error_binary), false)
-                dohProxy?.stop()
-                stopSelf()
-                return
+            val connected = when (modeToTry) {
+                TunnelMode.VLESS -> connectVless()
+                TunnelMode.DNS -> connectDns()
+                TunnelMode.AUTO -> connectVless() // Already handled above
             }
 
-            // Try connecting with domain failover
-            var connected = false
-            var attempts = 0
-            val maxAttempts = config.domains.size
-
-            while (!connected && attempts < maxAttempts) {
-                val currentDomain = config.domain
-                Log.d(TAG, "Trying domain ${attempts + 1}/$maxAttempts: $currentDomain")
-                // Don't show technical details on screen - just "Connecting..."
-                sendStatus(getString(R.string.status_connecting), false)
-
-                // Kill any existing tunnel process
-                tunnelProcess?.destroy()
-                tunnelProcess = null
-
-                // Start the DNS tunnel client with current domain
-                startTunnelClient(binaryPath)
-
-                // Wait for tunnel to be ready
-                delay(3000)
-
-                // Check if tunnel is working
-                if (isTunnelAlive()) {
-                    connected = true
-                    Log.d(TAG, "Successfully connected via $currentDomain")
-                } else {
-                    Log.w(TAG, "Failed to connect via $currentDomain, trying next...")
-                    attempts++
-                    if (config.hasMoreDomains()) {
-                        config = config.nextDomain()
-                        ServerConfig.save(this@MirageVpnService, config)
-                    }
+            // If AUTO mode and VLESS failed, try DNS
+            if (!connected && config.tunnelMode == TunnelMode.AUTO && modeToTry == TunnelMode.VLESS) {
+                Log.i(TAG, "VLESS failed in AUTO mode, trying DNS tunnel...")
+                val dnsConnected = connectDns()
+                if (!dnsConnected) {
+                    sendStatus(getString(R.string.status_error_tunnel), false)
+                    stopSelf()
+                    return
                 }
-            }
-
-            if (!connected) {
+            } else if (!connected) {
                 sendStatus(getString(R.string.status_error_tunnel), false)
-                dohProxy?.stop()
                 stopSelf()
                 return
             }
@@ -165,16 +180,207 @@ class MirageVpnService : VpnService() {
             establishVpn()
 
             isRunning = true
+            reconnectAttempts = 0
+            isReconnecting = false
             sendStatus(getString(R.string.status_connected), true)
             updateNotification(getString(R.string.status_connected))
 
             // Start decoy DNS queries to make traffic look normal
             startDecoyDns()
 
+            // Start health monitor
+            startHealthMonitor()
+
+            // Register network change callback
+            registerNetworkCallback()
+
+            // Background optimizer disabled - causes instability due to non-seamless switching
+            // TODO: Re-enable once hot-swapping is implemented (start new Xray before stopping old)
+            // if (activeTunnelMode == TunnelMode.VLESS && xrayManager != null) {
+            //     startBackgroundOptimizer()
+            // }
+
         } catch (e: Exception) {
             Log.e(TAG, "Connection failed", e)
             sendStatus("${getString(R.string.status_error)}: ${e.message}", false)
             disconnect()
+        }
+    }
+
+    /**
+     * Connect using VLESS + WebSocket + TLS via native Xray-core
+     * This uses the same battle-tested code as v2rayNG
+     */
+    private suspend fun connectVless(): Boolean {
+        Log.i(TAG, "Connecting via VLESS (Xray-core)...")
+
+        // Refresh configs from remote before connecting
+        try {
+            configRepository?.refreshFromRemote(config.remoteConfigUrl)
+        } catch (e: Exception) {
+            Log.w(TAG, "Remote config refresh failed (will use local/bundled): ${e.message}")
+        }
+
+        // Create XrayManager with scoring and repository
+        xrayManager = XrayManager(this, config.vlessSocksPort, scoreManager, configRepository)
+
+        // Set up probe listener
+        xrayManager?.setProbeListener(object : XrayManager.ProbeListener {
+            override fun onProbeProgress(current: Int, total: Int, currentConfig: String) {
+                sendProbeProgress(current, total, currentConfig)
+            }
+
+            override fun onProbeSuccess(config: VlessConfig) {
+                Log.i(TAG, "Xray probe found working config: ${config.name}")
+            }
+
+            override fun onProbeFailed() {
+                Log.e(TAG, "Xray probe failed - no working configuration found")
+            }
+        })
+
+        // Probe for working config
+        sendStatus(getString(R.string.status_probing), false)
+        val probeSuccess = xrayManager?.quickProbe() ?: false
+
+        if (!probeSuccess) {
+            sendStatus(getString(R.string.status_probe_failed), false)
+            xrayManager = null
+            return false
+        }
+
+        // Start Xray
+        sendStatus(getString(R.string.status_connecting), false)
+        val started = xrayManager?.start() ?: false
+
+        if (!started) {
+            sendStatus(getString(R.string.status_error_tunnel), false)
+            xrayManager = null
+            return false
+        }
+
+        // Wait a bit for SOCKS server to be ready
+        delay(1000)
+
+        // Verify SOCKS server is listening
+        if (!isSocksAlive(config.vlessSocksPort)) {
+            Log.e(TAG, "Xray SOCKS server not responding")
+            xrayManager?.stop()
+            xrayManager = null
+            return false
+        }
+
+        activeTunnelMode = TunnelMode.VLESS
+        activeSocksPort = config.vlessSocksPort
+
+        Log.i(TAG, "VLESS connected successfully via ${xrayManager?.getWorkingConfig()?.name}")
+        return true
+    }
+
+    /**
+     * Connect using DNS tunneling (original method)
+     */
+    private suspend fun connectDns(): Boolean {
+        Log.i(TAG, "Connecting via DNS tunnel...")
+
+        // Start DoH proxy if enabled (makes DNS traffic look like HTTPS)
+        if (config.useDoH) {
+            Log.d(TAG, "Starting DoH proxy on port ${config.dohPort}")
+            dohProxy = DohProxy(config.dohPort, config.dohEndpoints)
+
+            // Set up probe listener to report progress
+            dohProxy?.setProbeListener(object : DohProxy.ProbeListener {
+                override fun onProbeProgress(current: Int, total: Int, currentIp: String, currentSni: String, currentPort: Int) {
+                    sendProbeProgress(current, total, currentSni)
+                }
+
+                override fun onProbeSuccess(config: DohProxy.WorkingConfig) {
+                    Log.i(TAG, "DoH probe found working config: ${config.ip}:${config.port} SNI=${config.sni}")
+                }
+
+                override fun onProbeFailed() {
+                    Log.e(TAG, "DoH probe failed - no working configuration found")
+                }
+            })
+
+            // Probe for a working configuration first
+            sendStatus(getString(R.string.status_probing), false)
+            val probeSuccess = dohProxy?.probe() ?: false
+
+            if (!probeSuccess) {
+                sendStatus(getString(R.string.status_probe_failed), false)
+                dohProxy?.stop()
+                dohProxy = null
+                return false
+            }
+
+            // Start the proxy with the working configuration
+            dohProxy?.start()
+            delay(500)
+        }
+
+        // Extract and prepare the tunnel binary
+        val binaryPath = extractBinary()
+        if (binaryPath == null) {
+            sendStatus(getString(R.string.status_error_binary), false)
+            dohProxy?.stop()
+            return false
+        }
+
+        // Try connecting with domain failover
+        var connected = false
+        var attempts = 0
+        val maxAttempts = config.domains.size
+
+        while (!connected && attempts < maxAttempts) {
+            val currentDomain = config.domain
+            Log.d(TAG, "Trying domain ${attempts + 1}/$maxAttempts: $currentDomain")
+            // Don't show technical details on screen - just "Connecting..."
+            sendStatus(getString(R.string.status_connecting), false)
+
+            // Kill any existing tunnel process
+            tunnelProcess?.destroy()
+            tunnelProcess = null
+
+            // Start the DNS tunnel client with current domain
+            startTunnelClient(binaryPath)
+
+            // Wait for tunnel to be ready
+            delay(3000)
+
+            // Check if tunnel is working
+            if (isTunnelAlive()) {
+                connected = true
+                Log.d(TAG, "Successfully connected via $currentDomain")
+            } else {
+                Log.w(TAG, "Failed to connect via $currentDomain, trying next...")
+                attempts++
+                if (config.hasMoreDomains()) {
+                    config = config.nextDomain()
+                    ServerConfig.save(this@MirageVpnService, config)
+                }
+            }
+        }
+
+        if (connected) {
+            activeTunnelMode = TunnelMode.DNS
+            activeSocksPort = config.listenPort
+        } else {
+            dohProxy?.stop()
+            dohProxy = null
+        }
+
+        return connected
+    }
+
+    private fun isSocksAlive(port: Int): Boolean {
+        return try {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress("127.0.0.1", port), 1000)
+                true
+            }
+        } catch (e: Exception) {
+            false
         }
     }
 
@@ -286,6 +492,7 @@ class MirageVpnService : VpnService() {
         vpnInterface?.let { vpn ->
             val fd = vpn.fd
             Log.d(TAG, "VPN interface established with fd: $fd")
+            Log.d(TAG, "Using SOCKS5 port: $activeSocksPort (mode: $activeTunnelMode)")
 
             // Create configuration file for hev-socks5-tunnel
             val configFile = File(filesDir, "tun2socks.yml")
@@ -297,7 +504,7 @@ class MirageVpnService : VpnService() {
                   mtu: 8500
 
                 socks5:
-                  port: ${config.listenPort}
+                  port: $activeSocksPort
                   address: '127.0.0.1'
                   udp: 'udp'
             """.trimIndent()
@@ -316,8 +523,247 @@ class MirageVpnService : VpnService() {
         }
     }
 
+    // ========== Health Monitor & Auto-Reconnection ==========
+
+    /**
+     * Start health monitor coroutine that checks connection every 15 seconds.
+     */
+    private fun startHealthMonitor() {
+        healthMonitorJob?.cancel()
+        healthMonitorJob = serviceScope.launch {
+            Log.i(TAG, "Health monitor started")
+            while (isActive && isRunning) {
+                delay(HEALTH_CHECK_INTERVAL_MS)
+
+                if (!isRunning || isReconnecting) continue
+
+                val healthy = checkHealth()
+                if (healthy) {
+                    // Reset reconnect counter on successful health check
+                    if (reconnectAttempts > 0) {
+                        Log.i(TAG, "Connection healthy again, resetting reconnect counter")
+                        reconnectAttempts = 0
+                    }
+                } else {
+                    Log.w(TAG, "Health check failed, triggering reconnect")
+                    handleConnectionDrop()
+                }
+            }
+            Log.i(TAG, "Health monitor stopped")
+        }
+    }
+
+    /**
+     * Check connection health: SOCKS port alive + xray still running.
+     */
+    private fun checkHealth(): Boolean {
+        return when (activeTunnelMode) {
+            TunnelMode.VLESS -> {
+                val socksAlive = isSocksAlive(activeSocksPort)
+                val xrayRunning = xrayManager?.isRunning() ?: false
+                if (!socksAlive) Log.w(TAG, "Health: SOCKS port $activeSocksPort not responding")
+                if (!xrayRunning) Log.w(TAG, "Health: Xray not running")
+                socksAlive && xrayRunning
+            }
+            TunnelMode.DNS -> isTunnelAlive()
+            TunnelMode.AUTO -> isSocksAlive(activeSocksPort)
+        }
+    }
+
+    /**
+     * Handle connection drop with exponential backoff reconnection.
+     */
+    private suspend fun handleConnectionDrop() {
+        if (isReconnecting) return
+        isReconnecting = true
+
+        try {
+            while (reconnectAttempts < MAX_RECONNECT_ATTEMPTS && isRunning) {
+                val backoffDelay = BACKOFF_DELAYS_MS[reconnectAttempts.coerceAtMost(BACKOFF_DELAYS_MS.size - 1)]
+                reconnectAttempts++
+
+                Log.i(TAG, "Reconnect attempt $reconnectAttempts/$MAX_RECONNECT_ATTEMPTS (backoff: ${backoffDelay}ms)")
+                sendStatus(getString(R.string.status_reconnecting), true)
+                updateNotification(getString(R.string.status_reconnecting))
+
+                delay(backoffDelay)
+
+                if (!isRunning) break
+
+                // Attempt 1: Try restarting xray with same config (fastest)
+                if (activeTunnelMode == TunnelMode.VLESS && xrayManager != null) {
+                    Log.i(TAG, "Trying to restart Xray with same config...")
+                    xrayManager?.stop()
+                    delay(300)
+                    val restarted = xrayManager?.start() ?: false
+                    if (restarted) {
+                        delay(1000)
+                        if (isSocksAlive(activeSocksPort)) {
+                            Log.i(TAG, "Reconnected by restarting Xray")
+                            reconnectAttempts = 0
+                            sendStatus(getString(R.string.status_connected), true)
+                            updateNotification(getString(R.string.status_connected))
+                            return
+                        }
+                    }
+
+                    // Attempt 2: Quick probe for new config
+                    Log.i(TAG, "Restart failed, trying quick probe...")
+                    val probeSuccess = xrayManager?.quickProbe() ?: false
+                    if (probeSuccess) {
+                        xrayManager?.stop()
+                        delay(300)
+                        val started = xrayManager?.start() ?: false
+                        if (started) {
+                            delay(1000)
+                            if (isSocksAlive(activeSocksPort)) {
+                                Log.i(TAG, "Reconnected with new config: ${xrayManager?.getWorkingConfig()?.name}")
+                                reconnectAttempts = 0
+                                sendStatus(getString(R.string.status_connected), true)
+                                updateNotification(getString(R.string.status_connected))
+                                return
+                            }
+                        }
+                    }
+                }
+            }
+
+            // All attempts exhausted
+            if (isRunning) {
+                Log.e(TAG, "All reconnect attempts failed")
+                sendStatus(getString(R.string.status_connection_lost), true)
+                updateNotification(getString(R.string.status_connection_lost))
+            }
+        } finally {
+            isReconnecting = false
+        }
+    }
+
+    // ========== Network Change Detection ==========
+
+    /**
+     * Register for network connectivity changes.
+     */
+    private fun registerNetworkCallback() {
+        try {
+            val connectivityManager = getSystemService(ConnectivityManager::class.java) ?: return
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .build()
+
+            val callback = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    Log.i(TAG, "Network available, checking health after stabilization")
+                    serviceScope.launch {
+                        delay(NETWORK_STABILIZE_DELAY_MS)
+                        if (!isRunning) return@launch
+                        reconnectAttempts = 0 // Reset backoff on network change
+                        val healthy = checkHealth()
+                        if (!healthy) {
+                            Log.i(TAG, "Network changed but connection unhealthy, reconnecting")
+                            handleConnectionDrop()
+                        } else {
+                            Log.i(TAG, "Network changed, connection still healthy")
+                        }
+                    }
+                }
+
+                override fun onLost(network: Network) {
+                    Log.w(TAG, "Network lost")
+                    if (isRunning) {
+                        sendStatus(getString(R.string.status_waiting_network), true)
+                        updateNotification(getString(R.string.status_waiting_network))
+                    }
+                }
+            }
+
+            connectivityManager.registerNetworkCallback(request, callback)
+            networkCallback = callback
+            Log.i(TAG, "Network callback registered")
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to register network callback", e)
+        }
+    }
+
+    /**
+     * Unregister network callback.
+     */
+    private fun unregisterNetworkCallback() {
+        try {
+            networkCallback?.let { callback ->
+                val connectivityManager = getSystemService(ConnectivityManager::class.java)
+                connectivityManager?.unregisterNetworkCallback(callback)
+                Log.i(TAG, "Network callback unregistered")
+            }
+            networkCallback = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Error unregistering network callback", e)
+        }
+    }
+
+    // ========== Background Optimizer ==========
+
+    /**
+     * Start the background optimizer to periodically test and switch to faster configs.
+     */
+    private fun startBackgroundOptimizer() {
+        val manager = xrayManager ?: return
+        backgroundOptimizer = BackgroundOptimizer(
+            xrayManager = manager,
+            configRepository = configRepository,
+            remoteConfigUrl = config.remoteConfigUrl,
+            onSwitchConfig = { newConfig -> switchToConfig(newConfig) }
+        )
+        backgroundOptimizer?.start(serviceScope)
+    }
+
+    /**
+     * Seamlessly switch to a faster config while connected.
+     * tun2socks keeps running, brief <1s gap causes TCP retries (invisible to user).
+     */
+    private suspend fun switchToConfig(newConfig: VlessConfig) {
+        if (!isRunning || activeTunnelMode != TunnelMode.VLESS) return
+
+        Log.i(TAG, "Switching to faster config: ${newConfig.name}")
+
+        try {
+            // Stop xray
+            xrayManager?.stop()
+
+            // Brief pause
+            delay(300)
+
+            // Set new config and restart
+            xrayManager?.setWorkingConfig(newConfig)
+            val started = xrayManager?.start() ?: false
+
+            if (started) {
+                delay(1000)
+                if (isSocksAlive(activeSocksPort)) {
+                    Log.i(TAG, "Successfully switched to: ${newConfig.name}")
+                    return
+                }
+            }
+
+            // Switch failed — health monitor will detect and reconnect
+            Log.w(TAG, "Config switch failed, health monitor will handle recovery")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error during config switch", e)
+        }
+    }
+
+    // ========== Disconnect ==========
+
     private suspend fun disconnect() {
         isRunning = false
+
+        // Stop health monitor and optimizer
+        healthMonitorJob?.cancel()
+        healthMonitorJob = null
+        backgroundOptimizer?.stop()
+        backgroundOptimizer = null
+        unregisterNetworkCallback()
+
         decoyJob?.cancel()
         sendStatus(getString(R.string.status_disconnecting), false)
 
@@ -329,6 +775,10 @@ class MirageVpnService : VpnService() {
             } catch (e: Exception) {
                 Log.e(TAG, "Error stopping tun2socks", e)
             }
+
+            // Stop Xray manager
+            xrayManager?.stop()
+            xrayManager = null
 
             tunnelProcess?.destroy()
             tunnelProcess = null
@@ -352,6 +802,16 @@ class MirageVpnService : VpnService() {
             setPackage(packageName)
             putExtra(EXTRA_STATUS, status)
             putExtra(EXTRA_CONNECTED, connected)
+        }
+        sendBroadcast(intent)
+    }
+
+    private fun sendProbeProgress(current: Int, total: Int, currentSni: String) {
+        val intent = Intent(ACTION_PROBE_PROGRESS).apply {
+            setPackage(packageName)
+            putExtra(EXTRA_PROBE_CURRENT, current)
+            putExtra(EXTRA_PROBE_TOTAL, total)
+            putExtra(EXTRA_PROBE_SNI, currentSni)
         }
         sendBroadcast(intent)
     }
@@ -392,6 +852,10 @@ class MirageVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        healthMonitorJob?.cancel()
+        backgroundOptimizer?.stop()
+        backgroundOptimizer = null
+        unregisterNetworkCallback()
         decoyJob?.cancel()
         serviceScope.cancel()
         try {
@@ -399,6 +863,8 @@ class MirageVpnService : VpnService() {
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping tun2socks in onDestroy", e)
         }
+        xrayManager?.stop()
+        xrayManager = null
         dohProxy?.stop()
         dohProxy = null
         tunnelProcess?.destroy()
