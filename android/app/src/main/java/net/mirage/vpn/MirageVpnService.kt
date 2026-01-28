@@ -194,11 +194,10 @@ class MirageVpnService : VpnService() {
             // Register network change callback
             registerNetworkCallback()
 
-            // Background optimizer disabled - causes instability due to non-seamless switching
-            // TODO: Re-enable once hot-swapping is implemented (start new Xray before stopping old)
-            // if (activeTunnelMode == TunnelMode.VLESS && xrayManager != null) {
-            //     startBackgroundOptimizer()
-            // }
+            // Start background optimizer for VLESS connections (uses hot-swap for seamless switching)
+            if (activeTunnelMode == TunnelMode.VLESS && xrayManager != null) {
+                startBackgroundOptimizer()
+            }
 
         } catch (e: Exception) {
             Log.e(TAG, "Connection failed", e)
@@ -488,11 +487,11 @@ class MirageVpnService : VpnService() {
         startTun2Socks()
     }
 
-    private fun startTun2Socks() {
+    private fun startTun2Socks(port: Int = activeSocksPort) {
         vpnInterface?.let { vpn ->
             val fd = vpn.fd
             Log.d(TAG, "VPN interface established with fd: $fd")
-            Log.d(TAG, "Using SOCKS5 port: $activeSocksPort (mode: $activeTunnelMode)")
+            Log.d(TAG, "Using SOCKS5 port: $port (mode: $activeTunnelMode)")
 
             // Create configuration file for hev-socks5-tunnel
             val configFile = File(filesDir, "tun2socks.yml")
@@ -504,7 +503,7 @@ class MirageVpnService : VpnService() {
                   mtu: 8500
 
                 socks5:
-                  port: $activeSocksPort
+                  port: $port
                   address: '127.0.0.1'
                   udp: 'udp'
             """.trimIndent()
@@ -512,7 +511,7 @@ class MirageVpnService : VpnService() {
             try {
                 FileWriter(configFile).use { it.write(configContent) }
                 Log.d(TAG, "Created tun2socks config at: ${configFile.absolutePath}")
-                Log.d(TAG, "Starting tun2socks with SOCKS5 proxy at 127.0.0.1:${config.listenPort}")
+                Log.d(TAG, "Starting tun2socks with SOCKS5 proxy at 127.0.0.1:$port")
 
                 // Start the native tunnel
                 TunnelNative.startService(configFile.absolutePath, fd)
@@ -520,6 +519,20 @@ class MirageVpnService : VpnService() {
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to start tun2socks", e)
             }
+        }
+    }
+
+    /**
+     * Restart tun2socks with a new SOCKS port (used during hot-swap).
+     */
+    private fun restartTun2Socks(newPort: Int) {
+        try {
+            Log.d(TAG, "Restarting tun2socks with new port: $newPort")
+            TunnelNative.stopService()
+            startTun2Socks(newPort)
+            activeSocksPort = newPort
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to restart tun2socks", e)
         }
     }
 
@@ -718,37 +731,56 @@ class MirageVpnService : VpnService() {
     }
 
     /**
-     * Seamlessly switch to a faster config while connected.
-     * tun2socks keeps running, brief <1s gap causes TCP retries (invisible to user).
+     * Seamlessly switch to a faster config using hot-swap.
+     * Starts new Xray instance on alternate port, then switches tun2socks.
+     * This avoids any connection gap - traffic flows through old config until tun2socks switches.
      */
     private suspend fun switchToConfig(newConfig: VlessConfig) {
         if (!isRunning || activeTunnelMode != TunnelMode.VLESS) return
 
-        Log.i(TAG, "Switching to faster config: ${newConfig.name}")
+        val manager = xrayManager ?: return
+        Log.i(TAG, "Hot-swap: switching to ${newConfig.name}")
 
         try {
-            // Stop xray
-            xrayManager?.stop()
-
-            // Brief pause
-            delay(300)
-
-            // Set new config and restart
-            xrayManager?.setWorkingConfig(newConfig)
-            val started = xrayManager?.start() ?: false
-
-            if (started) {
-                delay(1000)
-                if (isSocksAlive(activeSocksPort)) {
-                    Log.i(TAG, "Successfully switched to: ${newConfig.name}")
-                    return
-                }
+            // Pick alternate port (toggle between 5201 and 5202)
+            val currentPort = manager.getCurrentPort()
+            val alternatePort = if (currentPort == config.vlessSocksPort) {
+                config.vlessSocksPort + 1
+            } else {
+                config.vlessSocksPort
             }
 
-            // Switch failed — health monitor will detect and reconnect
-            Log.w(TAG, "Config switch failed, health monitor will handle recovery")
+            // Step 1: Start secondary Xray on alternate port
+            val startedPort = manager.startSecondaryOnPort(newConfig, alternatePort)
+            if (startedPort < 0) {
+                Log.w(TAG, "Hot-swap: failed to start secondary Xray")
+                manager.stopSecondary()
+                return
+            }
+
+            // Step 2: Wait for secondary to be ready
+            delay(1000)
+
+            // Step 3: Verify SOCKS works on alternate port
+            if (!isSocksAlive(alternatePort)) {
+                Log.w(TAG, "Hot-swap: secondary SOCKS not responding on port $alternatePort")
+                manager.stopSecondary()
+                return
+            }
+
+            Log.i(TAG, "Hot-swap: secondary ready on port $alternatePort, switching tun2socks")
+
+            // Step 4: Restart tun2socks with new port (brief <100ms interruption)
+            restartTun2Socks(alternatePort)
+
+            // Step 5: Promote secondary to primary (stops old Xray)
+            manager.promoteSecondary(newConfig, alternatePort)
+
+            Log.i(TAG, "Hot-swap: successfully switched to ${newConfig.name} on port $alternatePort")
+
         } catch (e: Exception) {
-            Log.e(TAG, "Error during config switch", e)
+            Log.e(TAG, "Hot-swap error", e)
+            xrayManager?.stopSecondary()
         }
     }
 

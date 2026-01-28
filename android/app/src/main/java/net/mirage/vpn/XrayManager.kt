@@ -50,6 +50,10 @@ class XrayManager(
     private var initialized = false
     private var connectionStartMs: Long = 0L
 
+    // For hot-swapping: secondary instance runs on alternate port
+    private var secondaryCoreController: CoreController? = null
+    private var currentPort: Int = socksPort
+
     private val prefs: SharedPreferences by lazy {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
@@ -386,9 +390,13 @@ class XrayManager(
 
     /**
      * Stop Xray. Records uptime bonus score for the working config.
+     * Also stops any secondary instance that may be running.
      */
     fun stop() {
         try {
+            // Stop secondary first if running
+            stopSecondary()
+
             // Record uptime bonus before stopping
             if (connectionStartMs > 0 && scoreManager != null && workingConfig != null) {
                 val uptimeMin = ((System.currentTimeMillis() - connectionStartMs) / 60_000).toInt()
@@ -405,6 +413,7 @@ class XrayManager(
                 coreController?.stopLoop()
             }
             coreController = null
+            currentPort = socksPort // Reset to default port
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping Xray", e)
         }
@@ -427,6 +436,89 @@ class XrayManager(
     fun generateXrayConfigForTest(config: VlessConfig): String {
         val testPort = (50000..60000).random()
         return generateXrayConfig(config, testPort)
+    }
+
+    /**
+     * Get the current active SOCKS port.
+     */
+    fun getCurrentPort(): Int = currentPort
+
+    // ========== Hot-Swap Methods ==========
+
+    /**
+     * Start a secondary Xray instance on a different port for hot-swapping.
+     * The primary instance keeps running until we verify the secondary works.
+     * Returns the port the secondary is running on, or -1 on failure.
+     */
+    fun startSecondaryOnPort(config: VlessConfig, port: Int): Int {
+        if (secondaryCoreController?.isRunning == true) {
+            Log.w(TAG, "Secondary already running, stopping it first")
+            stopSecondary()
+        }
+
+        try {
+            initXray()
+
+            Log.i(TAG, "Starting secondary Xray on port $port with config: ${config.name}")
+
+            val xrayConfig = generateXrayConfig(config, port)
+
+            val callbackHandler = object : CoreCallbackHandler {
+                override fun onEmitStatus(l: Long, s: String?): Long {
+                    Log.d(TAG, "Secondary Xray status: $s")
+                    return 0
+                }
+                override fun shutdown(): Long = 0
+                override fun startup(): Long = 0
+            }
+
+            secondaryCoreController = Libv2ray.newCoreController(callbackHandler)
+            secondaryCoreController?.startLoop(xrayConfig, 0)
+
+            Log.i(TAG, "Secondary Xray started on port $port")
+            return port
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to start secondary Xray", e)
+            return -1
+        }
+    }
+
+    /**
+     * Promote the secondary Xray instance to primary after successful switch.
+     * Stops the old primary and updates state.
+     */
+    fun promoteSecondary(newConfig: VlessConfig, newPort: Int) {
+        Log.i(TAG, "Promoting secondary to primary (port $newPort)")
+
+        // Stop old primary (no uptime bonus - we're switching, not disconnecting)
+        connectionStartMs = 0L
+        coreController?.stopLoop()
+
+        // Promote secondary to primary
+        coreController = secondaryCoreController
+        secondaryCoreController = null
+        workingConfig = newConfig
+        currentPort = newPort
+        connectionStartMs = System.currentTimeMillis()
+
+        saveCachedConfig(newConfig)
+        Log.i(TAG, "Secondary promoted. Now running ${newConfig.name} on port $newPort")
+    }
+
+    /**
+     * Stop the secondary instance (e.g., if switch failed).
+     */
+    fun stopSecondary() {
+        try {
+            if (secondaryCoreController?.isRunning == true) {
+                Log.i(TAG, "Stopping secondary Xray")
+                secondaryCoreController?.stopLoop()
+            }
+            secondaryCoreController = null
+        } catch (e: Exception) {
+            Log.e(TAG, "Error stopping secondary Xray", e)
+        }
     }
 
     // ========== Config Generation ==========
