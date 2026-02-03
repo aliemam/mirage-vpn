@@ -13,6 +13,11 @@
     <string name="status_error">Error</string>
     <string name="status_error_binary">Failed to initialize</string>
     <string name="status_error_tunnel">Failed to establish tunnel</string>
+    <string name="status_probing">Finding best server…</string>
+    <string name="status_probe_failed">No servers available</string>
+    <string name="status_reconnecting">Reconnecting…</string>
+    <string name="status_connection_lost">Connection lost</string>
+    <string name="status_waiting_network">Waiting for network…</string>
 
     <string name="vpn_permission_denied">VPN permission is required</string>
 

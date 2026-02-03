@@ -28,6 +28,10 @@ android {
         }
     }
 
+    aaptOptions {
+        ignoreAssetsPattern = "!geoip.dat:!geosite.dat"
+    }
+
     externalNativeBuild {
         ndkBuild {
             path = file("src/main/jni/Android.mk")
@@ -73,6 +77,12 @@ android {
         jniLibs {
             useLegacyPackaging = true
         }
+        resources {
+            excludes += listOf(
+                "assets/geoip.dat",
+                "assets/geosite.dat"
+            )
+        }
     }
 }
 
@@ -84,4 +94,13 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+
+    // OkHttp for remote config fetching
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // Gson for JSON serialization
+    implementation("com.google.code.gson:gson:2.10.1")
+
+    // Xray-core for Android - native VLESS implementation
+    implementation(files("libs/libv2ray.aar"))
 }

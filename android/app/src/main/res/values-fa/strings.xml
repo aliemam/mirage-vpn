@@ -13,6 +13,11 @@
     <string name="status_error">خطا</string>
     <string name="status_error_binary">راه‌اندازی ناموفق</string>
     <string name="status_error_tunnel">برقراری تونل ناموفق</string>
+    <string name="status_probing">یافتن بهترین سرور…</string>
+    <string name="status_probe_failed">سرور در دسترس نیست</string>
+    <string name="status_reconnecting">اتصال مجدد…</string>
+    <string name="status_connection_lost">اتصال قطع شد</string>
+    <string name="status_waiting_network">در انتظار شبکه…</string>
 
     <string name="vpn_permission_denied">اجازه VPN لازم است</string>
 

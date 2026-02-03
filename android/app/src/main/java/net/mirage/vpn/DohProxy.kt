@@ -397,4 +397,34 @@ class DohProxy(
             connection?.disconnect()
         }
     }
+
+    // ========== Probe functionality (stub for now since DoH is disabled) ==========
+
+    data class WorkingConfig(
+        val ip: String,
+        val port: Int,
+        val sni: String
+    )
+
+    interface ProbeListener {
+        fun onProbeProgress(current: Int, total: Int, currentIp: String, currentSni: String, currentPort: Int)
+        fun onProbeSuccess(config: WorkingConfig)
+        fun onProbeFailed()
+    }
+
+    private var probeListener: ProbeListener? = null
+
+    fun setProbeListener(listener: ProbeListener) {
+        probeListener = listener
+    }
+
+    /**
+     * Probe for working configuration (stub - always returns true since DoH is disabled by default)
+     */
+    suspend fun probe(): Boolean {
+        // DoH is disabled by default, this is a stub
+        probeListener?.onProbeProgress(1, 1, "127.0.0.1", "localhost", listenPort)
+        probeListener?.onProbeSuccess(WorkingConfig("127.0.0.1", listenPort, "localhost"))
+        return true
+    }
 }
