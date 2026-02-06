@@ -1,0 +1,25 @@
+## MirageVPN Config Server
+## Serves configs.txt for remote config updates.
+##
+## Usage:
+##   1. mkdir -p configs
+##   2. Add your VLESS URIs to configs/configs.txt
+##   3. docker compose -f docker-compose.config-server.yml up -d
+##   4. Set remote_config_url in config.json to http://YOUR-SERVER-IP:8080/configs.txt
+##
+## To update configs: edit configs/configs.txt (no restart needed)
+
+services:
+  config-server:
+    image: nginx:alpine
+    container_name: mirage-config-server
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    volumes:
+      - ./configs:/usr/share/nginx/html:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"

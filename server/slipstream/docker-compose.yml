@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  slipstream:
+    image: slipstream-server:latest
+    container_name: slipstream-server
+    restart: unless-stopped
+    network_mode: host  # Required for iptables port forwarding
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - SLIPSTREAM_DOMAIN=${SLIPSTREAM_DOMAIN:-s.yourdomain.com}
+    volumes:
+      - ./keys:/keys
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

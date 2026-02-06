@@ -1,0 +1,12 @@
+# VLESS Proxy Configs
+# Add your VLESS URIs here, one per line. Lines starting with # are ignored.
+# Supports both WebSocket+TLS (via Cloudflare CDN) and REALITY (direct connection).
+#
+# SETUP: Copy this file to configs.txt before building:
+#   cp configs.txt.example configs.txt
+#
+# === VLESS WebSocket+TLS (via Cloudflare CDN) ===
+# vless://YOUR-UUID@CLOUDFLARE-IP:443?encryption=none&security=tls&type=ws&host=your.domain.com&sni=your.domain.com&path=%2Fyourpath#MyVLESS-WS
+#
+# === VLESS REALITY (direct connection) ===
+# vless://YOUR-UUID@SERVER-IP:443?security=reality&encryption=none&pbk=YOUR-PUBLIC-KEY&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=www.google.com&sid=YOUR-SHORT-ID#MyVLESS-Reality

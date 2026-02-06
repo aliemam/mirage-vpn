@@ -1,0 +1,29 @@
+# IDE
+.idea/
+*.iml
+
+# Android build outputs
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+
+# Signing
+*.keystore
+*.jks
+keystore.properties
+
+# Secrets
+.env
+*.env.local
+
+
+# APK releases (keep locally, not in repo)
+releases/
+
+# Docker build output
+output/
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  dnstt:
+    build: .
+    container_name: dnstt-server
+    restart: unless-stopped
+    network_mode: host  # Required for iptables port forwarding
+    cap_add:
+      - NET_ADMIN  # Required for iptables
+    environment:
+      - DNSTT_DOMAIN=${DNSTT_DOMAIN:-t.yourdomain.com}
+      - TUNNEL_PASSWORD=${TUNNEL_PASSWORD:-changeme}
+    volumes:
+      - ./keys:/keys
+      - ./ssh_authorized_keys:/home/tunnel/.ssh/authorized_keys:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

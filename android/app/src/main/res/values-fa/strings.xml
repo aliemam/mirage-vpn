@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">میراژ VPN</string>
+    <string name="app_subtitle">دسترسی امن به اینترنت</string>
+
+    <string name="connect">اتصال</string>
+    <string name="disconnect">قطع اتصال</string>
+
+    <string name="status_disconnected">قطع شده</string>
+    <string name="status_connecting">در حال اتصال…</string>
+    <string name="status_connected">متصل شد</string>
+    <string name="status_disconnecting">در حال قطع…</string>
+    <string name="status_error">خطا</string>
+    <string name="status_error_binary">راه‌اندازی ناموفق</string>
+    <string name="status_error_tunnel">برقراری تونل ناموفق</string>
+    <string name="status_probing">یافتن بهترین سرور…</string>
+    <string name="status_probe_failed">سرور در دسترس نیست</string>
+    <string name="status_reconnecting">اتصال مجدد…</string>
+    <string name="status_connection_lost">اتصال قطع شد</string>
+    <string name="status_waiting_network">در انتظار شبکه…</string>
+
+    <string name="vpn_permission_denied">اجازه VPN لازم است</string>
+
+    <string name="notification_channel_name">وضعیت VPN</string>
+    <string name="notification_channel_desc">نمایش وضعیت اتصال VPN</string>
+
+    <string name="status_probing_detail">تست سرور %1$d از %2$d</string>
+
+    <string name="info_text">ترافیک شما رمزگذاری شده و از طریق تونل‌های امن برای عبور از محدودیت‌ها مسیریابی می‌شود.</string>
+</resources>

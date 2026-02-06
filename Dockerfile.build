@@ -1,0 +1,100 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV ANDROID_HOME=/opt/android-sdk
+ENV ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/26.1.10909125
+ENV PATH=${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openjdk-17-jdk-headless \
+    wget \
+    unzip \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Android SDK command-line tools
+RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
+    wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/cmdline-tools.zip && \
+    unzip -q /tmp/cmdline-tools.zip -d ${ANDROID_HOME}/cmdline-tools && \
+    mv ${ANDROID_HOME}/cmdline-tools/cmdline-tools ${ANDROID_HOME}/cmdline-tools/latest && \
+    rm /tmp/cmdline-tools.zip
+
+# Accept licenses and install SDK components
+RUN yes | sdkmanager --licenses > /dev/null 2>&1 && \
+    sdkmanager \
+    "platforms;android-34" \
+    "build-tools;34.0.0" \
+    "ndk;26.1.10909125" \
+    "platform-tools"
+
+WORKDIR /app
+
+# Copy project files
+COPY android/ ./android/
+
+# Create local.properties
+RUN echo "sdk.dir=${ANDROID_HOME}" > android/local.properties
+
+# Generate debug keystore (used for signing if no release key provided)
+RUN mkdir -p /root/.android && \
+    keytool -genkey -v -keystore /root/.android/debug.keystore \
+    -storepass android -alias androiddebugkey -keypass android \
+    -keyalg RSA -keysize 2048 -validity 10000 \
+    -dname "CN=Android Debug,O=Android,C=US"
+
+# Pre-download Gradle and dependencies (cache layer)
+RUN cd android && chmod +x gradlew && ./gradlew --no-daemon dependencies || true
+
+# Build script
+COPY <<'EOF' /build.sh
+#!/bin/bash
+set -e
+cd /app/android
+
+# Copy example configs if real ones don't exist
+ASSETS_DIR="app/src/main/assets"
+
+# Per-protocol config files
+for protocol in vless vmess trojan shadowsocks; do
+    proto_dir="$ASSETS_DIR/protocols/$protocol"
+    if [ ! -f "$proto_dir/configs.txt" ] && [ -f "$proto_dir/configs.txt.example" ]; then
+        echo "No $protocol/configs.txt found, copying from example..."
+        cp "$proto_dir/configs.txt.example" "$proto_dir/configs.txt"
+    fi
+done
+
+# DNS config
+dns_dir="$ASSETS_DIR/protocols/dns"
+if [ ! -f "$dns_dir/config.json" ] && [ -f "$dns_dir/config.json.example" ]; then
+    echo "No dns/config.json found, copying from example..."
+    cp "$dns_dir/config.json.example" "$dns_dir/config.json"
+fi
+
+# App config
+if [ ! -f "$ASSETS_DIR/config.json" ] && [ -f "$ASSETS_DIR/config.json.example" ]; then
+    echo "No config.json found, copying from example..."
+    cp "$ASSETS_DIR/config.json.example" "$ASSETS_DIR/config.json"
+fi
+
+# Legacy flat file (backwards compatibility)
+if [ ! -f "$ASSETS_DIR/configs.txt" ] && [ -f "$ASSETS_DIR/configs.txt.example" ]; then
+    echo "No configs.txt found, copying from example..."
+    cp "$ASSETS_DIR/configs.txt.example" "$ASSETS_DIR/configs.txt"
+fi
+
+echo "Building MirageVPN APK..."
+./gradlew --no-daemon assembleRelease
+APK_PATH=$(find /app/android/app/build/outputs/apk/release -name "*.apk" | head -1)
+if [ -n "$APK_PATH" ] && [ -d "/output" ]; then
+    cp "$APK_PATH" /output/MirageVPN.apk
+    echo "APK copied to /output/MirageVPN.apk"
+else
+    echo "APK built at: $APK_PATH"
+    echo "Mount /output to extract: docker run --rm -v \$(pwd)/output:/output mirage-builder"
+fi
+echo "Build complete!"
+EOF
+RUN chmod +x /build.sh
+
+ENTRYPOINT ["/build.sh"]

@@ -1,0 +1,9 @@
+# Shadowsocks Proxy Configs
+# Add your Shadowsocks URIs here, one per line. Lines starting with # are ignored.
+# Uses SIP002 format.
+#
+# SETUP: Copy this file to configs.txt before building:
+#   cp configs.txt.example configs.txt
+#
+# === Shadowsocks (SIP002) ===
+# ss://YWVzLTI1Ni1nY206WU9VUi1QQVNTV09SRA==@SERVER-IP:8388#MyShadowsocks

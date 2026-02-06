@@ -1,0 +1,29 @@
+# DEPRECATED: Use per-protocol config files instead:
+#   protocols/vless/configs.txt
+#   protocols/vmess/configs.txt
+#   protocols/trojan/configs.txt
+#   protocols/shadowsocks/configs.txt
+#
+# This flat file is kept for backwards compatibility only.
+# The app will load from protocol folders first, and fall back to this file
+# only if no protocol folders are found.
+#
+# See docs/ folder for setup instructions for each protocol.
+#
+# Supported protocols: VLESS, VMess, Trojan, Shadowsocks
+# You can mix all protocol types - the app tests them all and picks the best one.
+#
+# === VLESS WebSocket+TLS (via Cloudflare CDN) ===
+# vless://YOUR-UUID@CLOUDFLARE-IP:443?encryption=none&security=tls&type=ws&host=your.domain.com&sni=your.domain.com&path=%2Fyourpath#MyVLESS-WS
+#
+# === VLESS REALITY (direct connection) ===
+# vless://YOUR-UUID@SERVER-IP:443?security=reality&encryption=none&pbk=YOUR-PUBLIC-KEY&headerType=none&fp=chrome&type=tcp&flow=xtls-rprx-vision&sni=www.google.com&sid=YOUR-SHORT-ID#MyVLESS-Reality
+#
+# === VMess (base64-encoded JSON) ===
+# vmess://eyJ2IjoiMiIsInBzIjoiTXlWTWVzcyIsImFkZCI6IjEwNC4xNy43MS4yMDYiLCJwb3J0IjoiNDQzIiwiaWQiOiJZT1VSLVVVSUQiLCJhaWQiOiIwIiwic2N5IjoiYXV0byIsIm5ldCI6IndzIiwidHlwZSI6Im5vbmUiLCJob3N0IjoieW91ci5kb21haW4uY29tIiwicGF0aCI6Ii95b3VycGF0aCIsInRscyI6InRscyIsInNuaSI6InlvdXIuZG9tYWluLmNvbSJ9
+#
+# === Trojan ===
+# trojan://YOUR-PASSWORD@SERVER-IP:443?sni=your.domain.com&type=tcp#MyTrojan
+#
+# === Shadowsocks (SIP002) ===
+# ss://YWVzLTI1Ni1nY206WU9VUi1QQVNTV09SRA==@SERVER-IP:8388#MyShadowsocks

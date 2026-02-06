@@ -1,0 +1,8 @@
+# Trojan Proxy Configs
+# Add your Trojan URIs here, one per line. Lines starting with # are ignored.
+#
+# SETUP: Copy this file to configs.txt before building:
+#   cp configs.txt.example configs.txt
+#
+# === Trojan ===
+# trojan://YOUR-PASSWORD@SERVER-IP:443?sni=your.domain.com&type=tcp#MyTrojan

@@ -1,0 +1,8 @@
+.git
+.idea
+releases
+android/.gradle
+android/app/build
+android/local.properties
+output
+*.apk

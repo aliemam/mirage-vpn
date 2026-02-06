@@ -1,0 +1,9 @@
+# VMess Proxy Configs
+# Add your VMess URIs here, one per line. Lines starting with # are ignored.
+# VMess URIs use base64-encoded JSON format.
+#
+# SETUP: Copy this file to configs.txt before building:
+#   cp configs.txt.example configs.txt
+#
+# === VMess (base64-encoded JSON) ===
+# vmess://eyJ2IjoiMiIsInBzIjoiTXlWTWVzcyIsImFkZCI6IjEwNC4xNy43MS4yMDYiLCJwb3J0IjoiNDQzIiwiaWQiOiJZT1VSLVVVSUQiLCJhaWQiOiIwIiwic2N5IjoiYXV0byIsIm5ldCI6IndzIiwidHlwZSI6Im5vbmUiLCJob3N0IjoieW91ci5kb21haW4uY29tIiwicGF0aCI6Ii95b3VycGF0aCIsInRscyI6InRscyIsInNuaSI6InlvdXIuZG9tYWluLmNvbSJ9

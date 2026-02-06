@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="background">#1A1A2E</color>
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#B0B0B0</color>
+
+    <color name="button_connect">#16213E</color>
+    <color name="button_disconnect">#E94560</color>
+
+    <color name="connected_green">#00C853</color>
+    <color name="connecting_yellow">#FFD600</color>
+    <color name="disconnected_red">#E94560</color>
+
+    <color name="white">#FFFFFF</color>
+    <color name="primary">#0F3460</color>
+    <color name="primary_dark">#16213E</color>
+    <color name="accent">#E94560</color>
+</resources>
