@@ -35,6 +35,7 @@ class ConfigRepository(private val context: Context) {
         if (configs.isEmpty()) {
             loadAllBundledAssets()
         }
+        expandWithGridSearch()
         Log.i(TAG, "Initialized with ${configs.size} configs from protocols: $availableProtocols")
     }
 
@@ -95,6 +96,7 @@ class ConfigRepository(private val context: Context) {
             }
         }
 
+        expandWithGridSearch()
         Log.i(TAG, "Remote refresh total: $totalNew new, ${configs.size} total")
         return totalNew
     }
@@ -199,6 +201,19 @@ class ConfigRepository(private val context: Context) {
      * Get config count.
      */
     fun size(): Int = configs.size
+
+    // ========== Grid Search ==========
+
+    private fun expandWithGridSearch() {
+        val gridConfigs = GridConfigGenerator().generate(configs.values.toList())
+        for (config in gridConfigs) {
+            val uri = RemoteConfigFetcher.toUri(config)
+            if (uri !in configs) {
+                configs[uri] = config
+                availableProtocols.add("vless")
+            }
+        }
+    }
 
     // ========== Private loading methods ==========
 
