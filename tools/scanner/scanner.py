@@ -254,8 +254,13 @@ async def cmd_scan_wizard(options: dict) -> None:
     export_json(results)
     export_best_uris(results, config)
 
-    # Post-scan menu
+    return results, config
+
+
+def _post_scan_menu(results, config) -> bool:
+    """Post-scan interactive menu. Returns True to rescan, False to exit."""
     from wizard import ask_post_scan
+
     while True:
         action = ask_post_scan()
         if action == "export_uri":
@@ -277,9 +282,9 @@ async def cmd_scan_wizard(options: dict) -> None:
             else:
                 console.print("\n  [red]No working configs found.[/red]\n")
         elif action == "rescan":
-            return  # Let main loop re-run wizard
+            return True
         else:
-            break
+            return False
 
 
 async def cmd_clean_ip_wizard(options: dict) -> None:
@@ -297,7 +302,7 @@ async def cmd_clean_ip_wizard(options: dict) -> None:
 
     results = await scan_cloudflare(
         subnets_file=options.get("subnets_file"),
-        concurrency=options.get("concurrency", 50),
+        concurrency=options.get("concurrency", 20),
         sample_per_subnet=options.get("sample_per_subnet", 100),
         on_result=on_result,
     )
@@ -342,7 +347,9 @@ def main() -> None:
             action = options.get("action")
 
             if action == "scan":
-                asyncio.run(cmd_scan_wizard(options))
+                result = asyncio.run(cmd_scan_wizard(options))
+                if result:
+                    _post_scan_menu(result[0], result[1])
             elif action == "clean_ip":
                 asyncio.run(cmd_clean_ip_wizard(options))
             else:
