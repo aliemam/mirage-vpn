@@ -83,8 +83,8 @@ def parse_args() -> argparse.Namespace:
     )
     ip_p.add_argument(
         "--concurrency", "-c",
-        type=int, default=50,
-        help="Parallel connections (default: 50)",
+        type=int, default=20,
+        help="Parallel connections per batch (default: 20)",
     )
     ip_p.add_argument(
         "--sample", type=int, default=100,
@@ -175,10 +175,9 @@ async def cmd_clean_ip(args: argparse.Namespace) -> None:
     console.print("\n  [cyan]Scanning Cloudflare IP ranges...[/cyan]\n")
 
     def on_result(r, completed, total):
-        if completed % 50 == 0 or completed == total:
-            pct = int(completed / total * 100) if total > 0 else 0
-            status = f"[green]✓ {r.latency_ms}ms[/green]" if r.success else "[red]✗[/red]"
-            console.print(f"  {completed}/{total} ({pct}%) {r.ip}: {status}")
+        pct = int(completed / total * 100) if total > 0 else 0
+        status = f"[green]✓ {r.latency_ms}ms[/green]" if r.success else "[red]✗[/red]"
+        console.print(f"  {completed}/{total} ({pct}%) {r.ip}: {status}")
 
     results = await scan_cloudflare(
         subnets_file=args.subnets,

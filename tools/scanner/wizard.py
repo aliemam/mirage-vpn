@@ -180,9 +180,9 @@ def ask_clean_ip_options() -> dict:
     concurrency = questionary.select(
         "Parallel connections:",
         choices=[
-            questionary.Choice("50 (recommended)", value="50"),
-            questionary.Choice("20 (conservative)", value="20"),
-            questionary.Choice("100 (aggressive)", value="100"),
+            questionary.Choice("20 (recommended)", value="20"),
+            questionary.Choice("10 (conservative / avoid rate limits)", value="10"),
+            questionary.Choice("50 (fast, may trigger rate limits)", value="50"),
         ],
         style=STYLE,
     ).ask()

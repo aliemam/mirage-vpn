@@ -11,7 +11,7 @@ Automatically tests thousands of xray/v2ray tunnel parameter combinations to fin
 - [Overview](#overview)
 - [Features](#features)
 - [Installation](#installation)
-  - [Option 1: Standalone Binary (Recommended for Iran)](#option-1-standalone-binary-recommended-for-iran)
+  - [Option 1: Standalone Binary (Recommended)](#option-1-standalone-binary-recommended)
   - [Option 2: Python venv](#option-2-python-venv)
 - [Quick Start](#quick-start)
 - [Usage Modes](#usage-modes)
@@ -35,6 +35,7 @@ Automatically tests thousands of xray/v2ray tunnel parameter combinations to fin
 - [Supported Protocols](#supported-protocols)
 - [Architecture](#architecture)
 - [Xray Binary](#xray-binary)
+- [Building from Source](#building-from-source)
 - [FAQ](#faq)
 
 ---
@@ -49,46 +50,32 @@ MirageVPN Scanner is a tool that finds the best anti-censorship tunnel settings 
 
 ## Features
 
-- **Interactive wizard** — Just run `python scanner.py`, no flags needed
+- **Interactive wizard** — Just run it, no flags needed
 - **Multi-protocol** — VLESS (WS+TLS, REALITY), VMess, Trojan, Shadowsocks
 - **Smart search** — Tests each parameter alone first, then combines winners (~200 tests vs 5000+)
 - **Parallel testing** — Run 5-20 tests simultaneously
 - **Live progress** — Real-time results table with colors as tests complete
-- **Clean IP scanner** — Find unblocked Cloudflare edge IPs
+- **Clean IP scanner** — Find unblocked Cloudflare edge IPs with rate-limit-safe batching
 - **Multiple output formats** — JSON results, ready-to-use proxy URIs, copy-paste for v2rayNG
-- **Standalone binary** — Single executable file, no Python/Docker needed, works offline in Iran
+- **Standalone binary** — Single executable file, no Python needed, works offline
 - **Cross-platform** — Linux (amd64, arm64), macOS (Intel, Apple Silicon)
 
 ## Installation
 
-### Option 1: Standalone Binary (Recommended for Iran)
+### Option 1: Standalone Binary (Recommended)
 
-**Single file, no dependencies.** Download one binary that bundles Python, all libraries, and xray-core. Nothing else needed — no Python, no Docker, no internet.
+**Single file, no dependencies.** One binary that bundles Python, all libraries, and xray-core. Nothing else needed — no Python, no internet.
 
-```bash
-# Download the binary for your platform
-# (from GitHub Releases or transferred via USB/Telegram/etc.)
-chmod +x mirage-scanner-linux-amd64
-./mirage-scanner-linux-amd64
-```
-
-Available binaries (built automatically by CI):
-- `mirage-scanner-linux-amd64` — for most Linux PCs and VPS servers
-- `mirage-scanner-linux-arm64` — for ARM servers (Oracle Cloud, Raspberry Pi)
-
-To build it yourself from source:
+The binary is at `tools/scanner/dist/mirage-scanner` after building (see [Building from Source](#building-from-source)), or you can get it from someone who already built it (transfer via USB, Telegram, etc.).
 
 ```bash
-cd tools/scanner
-source .venv/bin/activate
-pip install pyinstaller
-bash build-standalone.sh
-# Output: dist/mirage-scanner
+chmod +x mirage-scanner
+./mirage-scanner
 ```
 
 ### Option 2: Python venv
 
-Run directly with Python. Requires Python 3.8+ and internet access for pip + xray download.
+Run directly with Python. Requires Python 3.8+ and internet access for pip install.
 
 ```bash
 cd tools/scanner
@@ -105,13 +92,17 @@ pip install -r requirements.txt
 python scanner.py
 ```
 
-The xray binary is downloaded automatically on first run. Or place it manually at `tools/scanner/bin/xray`.
+**Xray binary:** When using Python mode, xray-core must be available. Place it manually at `tools/scanner/bin/xray` (download from [github.com/XTLS/Xray-core/releases](https://github.com/XTLS/Xray-core/releases)), or let the scanner auto-download it on first run if you have internet access.
 
 ## Quick Start
 
 **Interactive mode** (recommended for first use):
 
 ```bash
+# Standalone binary
+./mirage-scanner
+
+# Or with Python
 python scanner.py
 ```
 
@@ -121,16 +112,16 @@ The wizard asks you everything step by step.
 
 ```bash
 # Test fragment + fingerprint params against a VLESS server
-python scanner.py scan --uri "vless://uuid@host:443?security=tls&type=ws&..." --params fragment,fingerprint
+./mirage-scanner scan --uri "vless://uuid@host:443?security=tls&type=ws&..." --params fragment,fingerprint
 
 # Quick scan with just the most impactful parameters
-python scanner.py scan --uri "vless://..." --mode quick
+./mirage-scanner scan --uri "vless://..." --mode quick
 
 # Find clean Cloudflare IPs
-python scanner.py clean-ip
+./mirage-scanner clean-ip
 
 # Full grid search with speed measurement
-python scanner.py scan --file configs.txt --mode full --speed --concurrency 20
+./mirage-scanner scan --file configs.txt --mode full --speed --concurrency 20
 ```
 
 ## Usage Modes
@@ -158,10 +149,11 @@ Scans Cloudflare IP ranges to find IPs that are not blocked by your ISP. Useful 
 
 **What it does:**
 1. Takes Cloudflare CIDR ranges (built-in defaults or custom file)
-2. Samples IPs from each range
-3. Attempts TLS handshake on port 443 for each IP
-4. Measures handshake latency
-5. Outputs sorted list of working IPs
+2. Samples random IPs from each range and shuffles them
+3. Tests in batches with automatic delays between batches to avoid rate limiting
+4. Attempts TLS handshake on port 443 for each IP
+5. Measures handshake latency
+6. Outputs sorted list of working IPs
 
 **Default Cloudflare ranges tested:**
 - 104.16.0.0/13
@@ -175,13 +167,13 @@ Scans Cloudflare IP ranges to find IPs that are not blocked by your ISP. Useful 
 
 ```bash
 # Use default Cloudflare ranges
-python scanner.py clean-ip
+./mirage-scanner clean-ip
 
 # Use custom ranges file
-python scanner.py clean-ip --subnets my-ranges.txt --concurrency 100
+./mirage-scanner clean-ip --subnets my-ranges.txt --concurrency 10
 
 # Sample more IPs per subnet for thorough scan
-python scanner.py clean-ip --sample 500
+./mirage-scanner clean-ip --sample 500
 ```
 
 ### Setup Mode
@@ -192,7 +184,7 @@ SSH into a VPS and automatically install/configure xray with REALITY, WS+TLS, or
 
 ## Interactive Wizard
 
-When you run `python scanner.py` without arguments, the interactive wizard guides you through every step:
+When you run the scanner without arguments, the interactive wizard guides you through every step:
 
 ```
 ╔══════════════════════════════════════════════════════════╗
@@ -226,7 +218,7 @@ When you run `python scanner.py` without arguments, the interactive wizard guide
 ```
 
 The wizard then:
-- Downloads xray-core if needed
+- Downloads xray-core if needed (Python mode only)
 - Tests the baseline config
 - Runs the selected search mode with live progress
 - Shows a results table
@@ -264,10 +256,12 @@ usage: scanner.py clean-ip [-h] [--subnets FILE] [--concurrency N]
 
 Options:
   --subnets, -s FILE      CIDR ranges file, one per line (default: built-in CF ranges)
-  --concurrency, -c N     Parallel connections (default: 50)
+  --concurrency, -c N     Parallel connections per batch (default: 20)
   --sample N              IPs to test per subnet, 0=all (default: 100)
   --output, -o FILE       Output file (default: clean_ips.txt)
 ```
+
+The scanner automatically adds a delay between batches that scales with concurrency to avoid triggering rate limits. IPs are shuffled before scanning to spread connections across different subnets.
 
 ### `scanner.py setup`
 
@@ -481,15 +475,36 @@ Each test is independent — xray instances run on ports 20000-30000 and don't i
 
 ## Xray Binary
 
-The scanner needs the xray-core binary to run tests. It looks in this order:
+The scanner needs the xray-core binary to run tests.
+
+**Standalone binary:** xray-core is bundled inside the executable. Nothing extra needed.
+
+**Python mode:** The scanner looks for xray in this order:
 
 1. `tools/scanner/bin/xray` — local to the scanner
 2. `xray` on your `$PATH` — system-wide install
-3. **Auto-download** from GitHub releases — detected platform (linux-64, linux-arm64, macos-64, macos-arm64)
-
-**Docker:** The image bundles xray-core, no download needed.
+3. **Auto-download** from GitHub releases (requires internet) — detects platform (linux-64, linux-arm64, macos-64, macos-arm64)
 
 **Manual install:** Download from [github.com/XTLS/Xray-core/releases](https://github.com/XTLS/Xray-core/releases) and place the binary at `tools/scanner/bin/xray`.
+
+## Building from Source
+
+To build the standalone binary yourself:
+
+```bash
+cd tools/scanner
+bash build-standalone.sh
+```
+
+The build script handles everything automatically:
+1. Creates a Python virtual environment
+2. Installs dependencies and PyInstaller
+3. Downloads the xray-core binary for your platform
+4. Bundles everything into a single executable
+
+Output: `dist/mirage-scanner`
+
+The `bin/` directory is kept after the build — it contains the xray binary used by Python mode when running via `python scanner.py`.
 
 ## FAQ
 
@@ -517,3 +532,5 @@ Your server may be fully blocked at the IP level. Try:
 2. REALITY protocol (direct server, not Cloudflare)
 3. A different server/VPS provider
 
+**Q: Will the clean IP scan get me rate limited?**
+The scanner processes IPs in batches with automatic delays between batches that scale with your concurrency setting. IPs are shuffled across subnets to avoid hammering the same range. The default settings (20 concurrent, 0.5s delay) are safe for normal use.

@@ -109,34 +109,41 @@ async def _test_ip(
 
 async def scan_ips(
     ips: list[str],
-    concurrency: int = 50,
+    concurrency: int = 20,
     port: int = 443,
     timeout: float = 5.0,
     sni: str = "speed.cloudflare.com",
     on_result: Callable[[IPResult, int, int], None] | None = None,
 ) -> list[IPResult]:
-    """Scan a list of IPs with concurrency limit.
+    """Scan a list of IPs in batches with automatic delay to avoid rate limiting.
+
+    Processes IPs in groups of `concurrency`, with an auto-calculated pause
+    between batches that scales with batch size to stay under rate limits.
 
     Returns results sorted by latency (working IPs first).
     """
-    sem = asyncio.Semaphore(concurrency)
     results: list[IPResult] = []
     completed = 0
     total = len(ips)
-    lock = asyncio.Lock()
 
-    async def _test(ip: str) -> None:
-        nonlocal completed
-        async with sem:
-            r = await _test_ip(ip, port, timeout, sni)
-            async with lock:
-                completed += 1
-                results.append(r)
-                if on_result:
-                    on_result(r, completed, total)
+    # Auto-scale delay: bigger batches need longer cooldown
+    # 10 concurrent → 0.3s, 20 → 0.5s, 50 → 1.0s
+    batch_delay = max(0.3, concurrency * 0.025)
 
-    tasks = [asyncio.create_task(_test(ip)) for ip in ips]
-    await asyncio.gather(*tasks)
+    for batch_start in range(0, total, concurrency):
+        batch = ips[batch_start : batch_start + concurrency]
+        batch_results = await asyncio.gather(
+            *[_test_ip(ip, port, timeout, sni) for ip in batch]
+        )
+        for r in batch_results:
+            completed += 1
+            results.append(r)
+            if on_result:
+                on_result(r, completed, total)
+
+        # Delay between batches to avoid triggering rate limits
+        if batch_start + concurrency < total:
+            await asyncio.sleep(batch_delay)
 
     # Sort: successful by latency, then failed
     working = sorted([r for r in results if r.success], key=lambda r: r.latency_ms)
@@ -146,7 +153,7 @@ async def scan_ips(
 
 async def scan_cloudflare(
     subnets_file: str | None = None,
-    concurrency: int = 50,
+    concurrency: int = 20,
     sample_per_subnet: int = 100,
     sni: str = "speed.cloudflare.com",
     on_result: Callable[[IPResult, int, int], None] | None = None,
@@ -155,13 +162,15 @@ async def scan_cloudflare(
 
     Args:
         subnets_file: Path to file with CIDR ranges (one per line), or None for defaults
-        concurrency: Max parallel connections
+        concurrency: Batch size for parallel connections
         sample_per_subnet: Number of random IPs to sample per subnet (0=all)
         sni: SNI for TLS handshake
         on_result: Progress callback
     """
     subnets = load_subnets(subnets_file)
     ips = expand_subnets(subnets, sample_per_subnet)
+    import random
+    random.shuffle(ips)
     return await scan_ips(ips, concurrency, sni=sni, on_result=on_result)
 
 
