@@ -24,6 +24,19 @@ releases/
 # Docker build output
 output/
 
+# Scanner
+tools/scanner/.venv/
+tools/scanner/__pycache__/
+tools/scanner/bin/
+tools/scanner/build/
+tools/scanner/results.json
+tools/scanner/best_configs.txt
+tools/scanner/clean_ips.txt
+
+# Python
+__pycache__/
+*.pyc
+
 # OS files
 .DS_Store
 Thumbs.db

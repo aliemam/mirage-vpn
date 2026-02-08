@@ -176,6 +176,23 @@ docker run --rm -v $(pwd)/output:/output mirage-builder
 - تست روی نسخه‌های مختلف اندروید و شرایط شبکه
 - مستندات و ترجمه
 
+### پیش‌نیازهای توسعه
+
+<div dir="ltr">
+
+**Scanner tool** — For working on `tools/scanner/`, set up the Python environment:
+
+```bash
+cd tools/scanner
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+See [Scanner README](tools/scanner/README.md) for full documentation.
+
+</div>
+
 ## مجوز
 
 این پروژه برای اهداف آموزشی و تحقیقاتی است.
