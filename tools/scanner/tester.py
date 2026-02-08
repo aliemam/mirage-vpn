@@ -32,8 +32,8 @@ class TestResult:
     error: str = ""
 
 
-# Connectivity test URL (Cloudflare's captive portal check — lightweight)
-TEST_URL = "http://cp.cloudflare.com/"
+# Connectivity test URL (Google's 204 endpoint — same as Android app)
+TEST_URL = "https://www.google.com/generate_204"
 # Speed test URL (1MB file from Cloudflare)
 SPEED_URL = "https://speed.cloudflare.com/__down?bytes=1048576"
 
@@ -110,7 +110,7 @@ async def test_single(
                 await resp.read()
                 elapsed = time.monotonic() - start
 
-            if resp.status == 200 or resp.status == 204:
+            if resp.status in (200, 204):
                 result.success = True
                 result.latency_ms = int(elapsed * 1000)
             else:
