@@ -113,6 +113,7 @@ def _parse_vless(uri: str) -> dict | None:
                 "transport": params.get("type", "ws"),
                 "fingerprint": params.get("fp", ""),
                 "alpn": params.get("alpn", ""),
+                "allow_insecure": params.get("allowInsecure", "false") == "true",
             })
         else:
             base.update({
@@ -124,6 +125,15 @@ def _parse_vless(uri: str) -> dict | None:
                 "host": params.get("host", ""),
                 "path": unquote(params.get("path", "/")),
             })
+
+        # Parse fragment param: "length,interval,packets" e.g. "10-20,10-20,tlshello"
+        frag_str = params.get("fragment", "")
+        if frag_str:
+            parts = frag_str.split(",")
+            if len(parts) == 3:
+                base["fragment_length"] = parts[0]
+                base["fragment_interval"] = parts[1]
+                base["fragment_packets"] = parts[2]
 
         return base
     except Exception:
@@ -160,6 +170,15 @@ def _build_vless(config: dict) -> str:
             params += f"&fp={config['fingerprint']}"
         if config.get("alpn"):
             params += f"&alpn={config['alpn']}"
+
+    # Fragment: "length,interval,packets"
+    if config.get("fragment_length"):
+        frag = (
+            f"{config['fragment_length']},"
+            f"{config.get('fragment_interval', '10-20')},"
+            f"{config.get('fragment_packets', 'tlshello')}"
+        )
+        params += f"&fragment={frag}"
 
     return f"vless://{uuid}@{host}:{port}?{params}#{name}"
 

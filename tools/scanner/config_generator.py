@@ -259,19 +259,28 @@ def _build_stream_settings(
         stream["security"] = "none"
 
     # Socket options (fragment, TCP tweaks)
-    _apply_sockopt(stream, overrides)
+    _apply_sockopt(stream, overrides, config)
+
+    # allowInsecure
+    if config.get("allow_insecure") and "tlsSettings" in stream:
+        stream["tlsSettings"]["allowInsecure"] = True
 
     return stream
 
 
-def _apply_sockopt(stream: dict, overrides: dict) -> None:
-    """Apply sockopt overrides (fragment, TCP options) to stream settings."""
-    sockopt: dict = {}
+def _apply_sockopt(stream: dict, overrides: dict, config: dict | None = None) -> None:
+    """Apply sockopt overrides (fragment, TCP options) to stream settings.
 
-    # Fragment
-    frag_len = overrides.get("fragment_length")
-    frag_int = overrides.get("fragment_interval")
-    frag_pkt = overrides.get("fragment_packets")
+    If the original config has fragment settings (from URI), those are used as
+    defaults. Overrides take priority over config defaults.
+    """
+    sockopt: dict = {}
+    cfg = config or {}
+
+    # Fragment — override > config default > nothing
+    frag_len = overrides.get("fragment_length", cfg.get("fragment_length"))
+    frag_int = overrides.get("fragment_interval", cfg.get("fragment_interval"))
+    frag_pkt = overrides.get("fragment_packets", cfg.get("fragment_packets"))
     if frag_len or frag_int or frag_pkt:
         sockopt["fragment"] = {
             "packets": frag_pkt or "tlshello",
