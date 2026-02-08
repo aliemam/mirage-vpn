@@ -35,8 +35,10 @@ BANNER = """
 """
 
 PARAM_CHOICES = [
-    questionary.Choice("Fragment (size, interval, split type)", value="fragment"),
-    questionary.Choice("uTLS Fingerprint (chrome, firefox, qq, ...)", value="fingerprint"),
+    questionary.Choice("Fragment Length (packet size: 1-1, 10-20, 100-200, ...)", value="fragment_length"),
+    questionary.Choice("Fragment Interval (delay: 1-1ms, 2-5ms, 10-20ms, ...)", value="fragment_interval"),
+    questionary.Choice("Fragment Packets (split: tlshello, 1-2, 1-3, 1-5)", value="fragment_packets"),
+    questionary.Choice("uTLS Fingerprint (chrome, firefox, safari, qq, ...)", value="fingerprint"),
     questionary.Choice("ALPN (h2, http/1.1)", value="alpn"),
     questionary.Choice("ECH (Encrypted Client Hello)", value="ech"),
     questionary.Choice("Socket Options (TCP_NODELAY, TFO, MPTCP)", value="socket_options"),
@@ -120,7 +122,8 @@ def ask_params() -> list[str]:
 
     if not result:
         console.print("  [yellow]No params selected, using recommended defaults.[/yellow]")
-        return ["fragment", "fingerprint", "alpn"]
+        return ["fragment_length", "fragment_interval", "fragment_packets",
+                "fingerprint", "alpn"]
 
     return result
 

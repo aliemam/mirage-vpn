@@ -39,9 +39,10 @@ def parse_args() -> argparse.Namespace:
     )
     scan_p.add_argument(
         "--params", "-p",
-        default="fragment,fingerprint,alpn",
+        default="fragment_length,fragment_interval,fragment_packets,fingerprint,alpn",
         help="Comma-separated param groups to test "
-             "(fragment,fingerprint,alpn,ech,socket_options,transport)",
+             "(fragment_length,fragment_interval,fragment_packets,"
+             "fingerprint,alpn,ech,socket_options,transport)",
     )
     scan_p.add_argument(
         "--mode", "-m",

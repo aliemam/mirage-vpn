@@ -28,7 +28,9 @@ PARAM_SPACE = {
 
 # Which user-facing parameter groups map to which param_space keys
 PARAM_GROUPS = {
-    "fragment": ["fragment_length", "fragment_interval", "fragment_packets"],
+    "fragment_length": ["fragment_length"],
+    "fragment_interval": ["fragment_interval"],
+    "fragment_packets": ["fragment_packets"],
     "fingerprint": ["fingerprint"],
     "alpn": ["alpn"],
     "ech": ["ech_enabled", "ech_dns"],
@@ -40,7 +42,8 @@ PARAM_GROUPS = {
 }
 
 # Most impactful params for quick mode
-QUICK_PARAMS = ["fragment", "fingerprint", "alpn"]
+QUICK_PARAMS = ["fragment_length", "fragment_interval", "fragment_packets",
+                "fingerprint", "alpn"]
 
 
 def build_xray_json(config: dict, overrides: dict, socks_port: int) -> dict:
