@@ -12,15 +12,19 @@ sealed class ProxyConfig {
     // ========== VLESS Configs ==========
 
     /**
-     * VLESS + WebSocket + TLS Configuration (for Cloudflare CDN)
+     * VLESS + TLS Configuration (supports ws, xhttp, grpc, h2, tcp transports)
      */
-    data class WebSocket(
-        override val connectHost: String,  // Cloudflare IP to connect to
+    data class VlessTls(
+        override val connectHost: String,  // CDN IP or server IP to connect to
         override val port: Int,            // Port (443, 2053, etc.)
         val sni: String,                   // Server Name Indication
         val host: String,                  // HTTP Host header
-        val path: String,                  // WebSocket path
+        val path: String,                  // Path (WebSocket/xhttp/h2) or gRPC serviceName
         val uuid: String,                  // VLESS UUID
+        val network: String = "ws",        // transport: ws, xhttp, grpc, h2, tcp
+        val fingerprint: String = "",      // TLS fingerprint (chrome, firefox, safari, etc.)
+        val alpn: String = "",             // ALPN negotiation (h2, http/1.1, etc.)
+        val mode: String = "",             // xhttp mode: auto, packet-up, stream-up
         override val name: String = ""
     ) : ProxyConfig()
 

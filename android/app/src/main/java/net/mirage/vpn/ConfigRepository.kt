@@ -304,7 +304,7 @@ class ConfigRepository(private val context: Context) {
                     count++
                     // Detect protocol for availability tracking
                     val protocol = when (config) {
-                        is ProxyConfig.WebSocket, is ProxyConfig.Reality -> "vless"
+                        is ProxyConfig.VlessTls, is ProxyConfig.Reality -> "vless"
                         is ProxyConfig.VMess -> "vmess"
                         is ProxyConfig.Trojan -> "trojan"
                         is ProxyConfig.Shadowsocks -> "shadowsocks"
@@ -336,7 +336,7 @@ class ConfigRepository(private val context: Context) {
         val buckets = mutableMapOf<String, MutableList<String>>()
         for ((uri, config) in fetched) {
             val protocol = when (config) {
-                is ProxyConfig.WebSocket, is ProxyConfig.Reality -> "vless"
+                is ProxyConfig.VlessTls, is ProxyConfig.Reality -> "vless"
                 is ProxyConfig.VMess -> "vmess"
                 is ProxyConfig.Trojan -> "trojan"
                 is ProxyConfig.Shadowsocks -> "shadowsocks"

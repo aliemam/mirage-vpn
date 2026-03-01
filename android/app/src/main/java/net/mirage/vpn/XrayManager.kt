@@ -93,8 +93,8 @@ class XrayManager(
         try {
             val editor = prefs.edit()
             when (config) {
-                is ProxyConfig.WebSocket -> {
-                    editor.putString(KEY_CACHED_CONFIG_TYPE, "websocket")
+                is ProxyConfig.VlessTls -> {
+                    editor.putString(KEY_CACHED_CONFIG_TYPE, "vless_tls")
                     editor.putString(KEY_CACHED_CONFIG_JSON, JSONObject().apply {
                         put("connectHost", config.connectHost)
                         put("port", config.port)
@@ -102,6 +102,10 @@ class XrayManager(
                         put("host", config.host)
                         put("path", config.path)
                         put("uuid", config.uuid)
+                        put("network", config.network)
+                        put("fingerprint", config.fingerprint)
+                        put("alpn", config.alpn)
+                        put("mode", config.mode)
                         put("name", config.name)
                     }.toString())
                 }
@@ -188,13 +192,17 @@ class XrayManager(
             val json = JSONObject(jsonStr)
 
             val config = when (type) {
-                "websocket" -> ProxyConfig.WebSocket(
+                "websocket", "vless_tls" -> ProxyConfig.VlessTls(
                     connectHost = json.getString("connectHost"),
                     port = json.getInt("port"),
                     sni = json.getString("sni"),
                     host = json.getString("host"),
                     path = json.getString("path"),
                     uuid = json.getString("uuid"),
+                    network = json.optString("network", "ws"),
+                    fingerprint = json.optString("fingerprint", ""),
+                    alpn = json.optString("alpn", ""),
+                    mode = json.optString("mode", ""),
                     name = json.getString("name")
                 )
                 "reality" -> ProxyConfig.Reality(
@@ -637,7 +645,7 @@ class XrayManager(
         // Outbounds - protocol-specific
         val outbounds = JSONArray()
         val proxyOutbound = when (config) {
-            is ProxyConfig.WebSocket -> generateWebSocketOutbound(config)
+            is ProxyConfig.VlessTls -> generateVlessTlsOutbound(config)
             is ProxyConfig.Reality -> generateRealityOutbound(config)
             is ProxyConfig.VMess -> generateVmessOutbound(config)
             is ProxyConfig.Trojan -> generateTrojanOutbound(config)
@@ -665,9 +673,9 @@ class XrayManager(
     }
 
     /**
-     * Generate VLESS + WebSocket + TLS outbound
+     * Generate VLESS + TLS outbound (supports ws, xhttp, grpc, h2, tcp transports)
      */
-    private fun generateWebSocketOutbound(config: ProxyConfig.WebSocket): JSONObject {
+    private fun generateVlessTlsOutbound(config: ProxyConfig.VlessTls): JSONObject {
         return JSONObject().apply {
             put("tag", "proxy")
             put("protocol", "vless")
@@ -685,20 +693,16 @@ class XrayManager(
                     })
                 })
             })
-            put("streamSettings", JSONObject().apply {
-                put("network", "ws")
-                put("security", "tls")
-                put("tlsSettings", JSONObject().apply {
-                    put("serverName", config.sni)
-                    put("allowInsecure", false)
-                })
-                put("wsSettings", JSONObject().apply {
-                    put("path", config.path)
-                    put("headers", JSONObject().apply {
-                        put("Host", config.host)
-                    })
-                })
-            })
+            put("streamSettings", generateStreamSettings(
+                network = config.network,
+                tls = "tls",
+                sni = config.sni.ifEmpty { config.host.ifEmpty { config.connectHost } },
+                host = config.host.ifEmpty { config.connectHost },
+                path = config.path,
+                fingerprint = config.fingerprint,
+                alpn = config.alpn,
+                mode = config.mode
+            ))
         }
     }
 
@@ -832,8 +836,8 @@ class XrayManager(
     // ========== Shared Stream Settings ==========
 
     /**
-     * Generate streamSettings block shared by VMess and Trojan.
-     * Handles transport (ws, tcp, grpc, h2) and TLS configuration.
+     * Generate streamSettings block shared by VLESS+TLS, VMess, and Trojan.
+     * Handles transport (ws, xhttp, tcp, grpc, h2) and TLS configuration.
      */
     private fun generateStreamSettings(
         network: String,
@@ -842,7 +846,8 @@ class XrayManager(
         host: String,
         path: String,
         fingerprint: String,
-        alpn: String
+        alpn: String,
+        mode: String = ""
     ): JSONObject {
         return JSONObject().apply {
             put("network", network)
@@ -868,6 +873,11 @@ class XrayManager(
                         })
                     }
                 })
+                "xhttp" -> put("xhttpSettings", JSONObject().apply {
+                    put("path", path)
+                    if (host.isNotEmpty()) put("host", host)
+                    if (mode.isNotEmpty()) put("mode", mode)
+                })
                 "grpc" -> put("grpcSettings", JSONObject().apply {
                     put("serviceName", path)
                 })
@@ -877,6 +887,7 @@ class XrayManager(
                         put("host", JSONArray().apply { put(host) })
                     }
                 })
+                "tcp" -> { /* no additional transport settings needed */ }
             }
         }
     }

@@ -166,15 +166,19 @@ object RemoteConfigFetcher {
                         name = name
                     )
                 }
-                security == "tls" && type == "ws" -> {
+                security == "tls" || security == "" || security == "none" -> {
                     val path = (params["path"] ?: "/").replace("%2F", "/")
-                    ProxyConfig.WebSocket(
+                    ProxyConfig.VlessTls(
                         connectHost = host,
                         port = port,
                         sni = params["sni"] ?: host,
                         host = params["host"] ?: host,
                         path = path,
                         uuid = uuid,
+                        network = type,
+                        fingerprint = params["fp"] ?: "",
+                        alpn = params["alpn"] ?: "",
+                        mode = params["mode"] ?: "",
                         name = name
                     )
                 }
@@ -422,7 +426,7 @@ object RemoteConfigFetcher {
      */
     fun toUri(config: ProxyConfig): String {
         return when (config) {
-            is ProxyConfig.WebSocket -> toVlessWsUri(config)
+            is ProxyConfig.VlessTls -> toVlessTlsUri(config)
             is ProxyConfig.Reality -> toVlessRealityUri(config)
             is ProxyConfig.VMess -> toVmessUri(config)
             is ProxyConfig.Trojan -> toTrojanUri(config)
@@ -430,11 +434,22 @@ object RemoteConfigFetcher {
         }
     }
 
-    private fun toVlessWsUri(config: ProxyConfig.WebSocket): String {
+    private fun toVlessTlsUri(config: ProxyConfig.VlessTls): String {
         val encodedPath = config.path.replace("/", "%2F")
+        val params = mutableListOf(
+            "encryption=none",
+            "security=tls",
+            "type=${config.network}"
+        )
+        if (config.host.isNotEmpty()) params.add("host=${config.host}")
+        if (config.sni.isNotEmpty()) params.add("sni=${config.sni}")
+        if (encodedPath.isNotEmpty()) params.add("path=$encodedPath")
+        if (config.fingerprint.isNotEmpty()) params.add("fp=${config.fingerprint}")
+        if (config.alpn.isNotEmpty()) params.add("alpn=${config.alpn}")
+        if (config.mode.isNotEmpty()) params.add("mode=${config.mode}")
+
         return "vless://${config.uuid}@${config.connectHost}:${config.port}" +
-                "?encryption=none&security=tls&type=ws" +
-                "&host=${config.host}&sni=${config.sni}&path=$encodedPath" +
+                "?${params.joinToString("&")}" +
                 "#${config.name}"
     }
 
