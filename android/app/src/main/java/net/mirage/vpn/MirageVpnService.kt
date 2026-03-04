@@ -156,13 +156,29 @@ class MirageVpnService : VpnService() {
             val hasDns = dnsConfig?.isAvailable ?: false
 
             val connected = when {
-                hasXray && hasDns -> {
-                    // Both available: try Xray first, fall back to DNS
-                    val xrayOk = connectXray()
-                    if (!xrayOk) {
-                        Log.i(TAG, "Xray failed, falling back to DNS tunnel...")
-                        connectDns()
-                    } else true
+                hasXray && hasDns -> coroutineScope {
+                    // Both available: race concurrently, first success wins
+                    Log.i(TAG, "Racing Xray and DNS probes concurrently")
+                    val xrayDeferred = async { connectXray() }
+                    val dnsDeferred = async { connectDns() }
+
+                    val xrayOk = xrayDeferred.await()
+                    val dnsOk = dnsDeferred.await()
+
+                    when {
+                        xrayOk && dnsOk -> {
+                            // Both succeeded — prefer Xray (lower latency), cleanup DNS
+                            Log.i(TAG, "Both Xray and DNS succeeded, using Xray")
+                            cleanupDns()
+                            true
+                        }
+                        xrayOk -> true
+                        dnsOk -> {
+                            cleanupXray()
+                            true
+                        }
+                        else -> false
+                    }
                 }
                 hasXray -> connectXray()
                 hasDns -> connectDns()
@@ -480,6 +496,24 @@ class MirageVpnService : VpnService() {
         }
     }
 
+    /**
+     * Clean up Xray resources (used when DNS wins the race or during mode switch).
+     */
+    private fun cleanupXray() {
+        xrayManager?.stop()
+        xrayManager = null
+    }
+
+    /**
+     * Clean up DNS resources (used when Xray wins the race or during mode switch).
+     */
+    private fun cleanupDns() {
+        tunnelProcess?.destroy()
+        tunnelProcess = null
+        dohProxy?.stop()
+        dohProxy = null
+    }
+
     private fun establishVpn() {
         val builder = Builder()
             .setSession(config.displayName)
@@ -592,12 +626,12 @@ class MirageVpnService : VpnService() {
                 socksAlive && xrayRunning
             }
             TunnelMode.DNS -> isTunnelAlive()
-            TunnelMode.AUTO -> isSocksAlive(activeSocksPort)
         }
     }
 
     /**
      * Handle connection drop with exponential backoff reconnection.
+     * Tries to recover with the current mode first, then switches to the other mode.
      */
     private suspend fun handleConnectionDrop() {
         if (isReconnecting) return
@@ -616,8 +650,8 @@ class MirageVpnService : VpnService() {
 
                 if (!isRunning) break
 
-                // Attempt 1: Try restarting xray with same config (fastest)
                 if (activeTunnelMode == TunnelMode.XRAY && xrayManager != null) {
+                    // Attempt 1: Restart Xray with same config (fastest)
                     Log.i(TAG, "Trying to restart Xray with same config...")
                     xrayManager?.stop()
                     delay(300)
@@ -633,7 +667,7 @@ class MirageVpnService : VpnService() {
                         }
                     }
 
-                    // Attempt 2: Quick probe for new config
+                    // Attempt 2: Quick probe for new Xray config
                     Log.i(TAG, "Restart failed, trying quick probe...")
                     val probeSuccess = xrayManager?.quickProbe() ?: false
                     if (probeSuccess) {
@@ -652,14 +686,57 @@ class MirageVpnService : VpnService() {
                         }
                     }
                 }
+
+                if (activeTunnelMode == TunnelMode.DNS) {
+                    // DNS reconnect: try restarting tunnel with current domain
+                    Log.i(TAG, "Trying to restart DNS tunnel...")
+                    cleanupDns()
+                    delay(300)
+                    val dnsOk = connectDns()
+                    if (dnsOk) {
+                        restartTun2Socks(activeSocksPort)
+                        Log.i(TAG, "Reconnected via DNS tunnel")
+                        reconnectAttempts = 0
+                        sendStatus(getString(R.string.status_connected), true)
+                        updateNotification(getString(R.string.status_connected))
+                        return
+                    }
+                }
             }
 
-            // All attempts exhausted
-            if (isRunning) {
-                Log.e(TAG, "All reconnect attempts failed")
-                sendStatus(getString(R.string.status_connection_lost), true)
-                updateNotification(getString(R.string.status_connection_lost))
+            if (!isRunning) return
+
+            // All same-mode attempts exhausted — try switching to the other mode
+            Log.i(TAG, "Same-mode reconnection exhausted, trying alternative mode...")
+
+            if (activeTunnelMode == TunnelMode.XRAY && dnsConfig?.isAvailable == true) {
+                Log.i(TAG, "Switching from Xray to DNS tunnel...")
+                cleanupXray()
+                val dnsOk = connectDns()
+                if (dnsOk) {
+                    restartTun2Socks(activeSocksPort)
+                    reconnectAttempts = 0
+                    sendStatus(getString(R.string.status_connected), true)
+                    updateNotification(getString(R.string.status_connected))
+                    return
+                }
+            } else if (activeTunnelMode == TunnelMode.DNS && configRepository?.hasXrayConfigs() == true) {
+                Log.i(TAG, "Switching from DNS to Xray...")
+                cleanupDns()
+                val xrayOk = connectXray()
+                if (xrayOk) {
+                    restartTun2Socks(activeSocksPort)
+                    reconnectAttempts = 0
+                    sendStatus(getString(R.string.status_connected), true)
+                    updateNotification(getString(R.string.status_connected))
+                    return
+                }
             }
+
+            // Everything failed
+            Log.e(TAG, "All reconnect attempts failed (both modes)")
+            sendStatus(getString(R.string.status_connection_lost), true)
+            updateNotification(getString(R.string.status_connection_lost))
         } finally {
             isReconnecting = false
         }

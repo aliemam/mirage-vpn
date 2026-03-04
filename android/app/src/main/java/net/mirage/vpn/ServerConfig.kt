@@ -10,8 +10,7 @@ import java.io.File
  */
 enum class TunnelMode {
     DNS,    // DNS tunneling via slipstream
-    XRAY,   // Xray-core (VLESS, VMess, Trojan, Shadowsocks)
-    AUTO    // Try Xray first, fall back to DNS
+    XRAY    // Xray-core (VLESS, VMess, Trojan, Shadowsocks)
 }
 
 /**
