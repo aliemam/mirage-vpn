@@ -15,6 +15,7 @@
 {remote_config_url}/protocols/vmess/configs.txt
 {remote_config_url}/protocols/trojan/configs.txt
 {remote_config_url}/protocols/shadowsocks/configs.txt
+{remote_config_url}/protocols/dnstt/configs.txt
 {remote_config_url}/protocols/dns/config.json
 ```
 
@@ -47,8 +48,8 @@
 
 | Mode | Description | Best for |
 |------|-------------|----------|
-| **Folder structure** | Separate file per protocol (`/protocols/vless/configs.txt` etc.) | Dedicated server, GitHub Pages |
-| **Flat file (fallback)** | All configs in one file | Google Drive, GitHub Gist, Pastebin |
+| **Folder structure** | Separate file per protocol (`/protocols/vless/configs.txt`, `/protocols/dnstt/configs.txt` etc.) | Dedicated server, GitHub Pages |
+| **Flat file (fallback)** | All configs in one file (excludes dnstt and DNS config) | Google Drive, GitHub Gist, Pastebin |
 
 </div>
 
@@ -68,6 +69,7 @@ mkdir -p configs/protocols/vless
 mkdir -p configs/protocols/vmess
 mkdir -p configs/protocols/trojan
 mkdir -p configs/protocols/shadowsocks
+mkdir -p configs/protocols/dnstt
 mkdir -p configs/protocols/dns
 
 # Add configs
@@ -88,6 +90,11 @@ cat > configs/protocols/dns/config.json << 'EOF'
 }
 EOF
 
+# dnstt configs (optional)
+cat > configs/protocols/dnstt/configs.txt << 'EOF'
+dns://eyJwcyI6Im15LXNlcnZlciIsIm5zIjoiZDEueW91cmRvbWFpbi5jb20iLCJwdWJrZXkiOiJhYmNkZWYuLi4iLCJhZGRyIjoiMS4xLjEuMSIsInRyYW5zcG9ydCI6InVkcCJ9
+EOF
+
 # Start config server
 docker compose -f docker-compose.config-server.yml up -d
 ```
@@ -105,6 +112,7 @@ GET http://YOUR-SERVER-IP:8080/protocols/vless/configs.txt
 GET http://YOUR-SERVER-IP:8080/protocols/vmess/configs.txt
 GET http://YOUR-SERVER-IP:8080/protocols/trojan/configs.txt
 GET http://YOUR-SERVER-IP:8080/protocols/shadowsocks/configs.txt
+GET http://YOUR-SERVER-IP:8080/protocols/dnstt/configs.txt
 GET http://YOUR-SERVER-IP:8080/protocols/dns/config.json
 ```
 
@@ -122,6 +130,7 @@ GET http://YOUR-SERVER-IP:8080/protocols/dns/config.json
      vmess/configs.txt
      trojan/configs.txt
      shadowsocks/configs.txt
+     dnstt/configs.txt
      dns/config.json
    ```
 ۳. ‏GitHub Pages را فعال کنید (Settings > Pages > Source: main branch)
@@ -208,6 +217,9 @@ trojan://password@host:port?security=tls&sni=domain&type=tcp#Name
 
 # Shadowsocks (base64 of method:password)
 ss://bWV0aG9kOnBhc3N3b3Jk@host:port#Name
+
+# dnstt (base64 of JSON config)
+dns://eyJwcyI6Im5hbWUiLCJucyI6ImQxLnlvdXJkb21haW4uY29tIiwicHVia2V5IjoiaGV4a2V5IiwiYWRkciI6IjEuMS4xLjEiLCJ0cmFuc3BvcnQiOiJ1ZHAifQ==
 ```
 
 ---

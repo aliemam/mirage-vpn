@@ -43,6 +43,43 @@ object RemoteConfigFetcher {
     }
 
     /**
+     * Fetch dnstt configs from a remote URL. Each line should be a dns:// URI.
+     * Returns list of (originalUri, parsedConfig) pairs.
+     */
+    fun fetchDnstt(url: String): List<Pair<String, DnsttConfig>> {
+        return try {
+            val request = Request.Builder().url(url).build()
+            val response = client.newCall(request).execute()
+            if (!response.isSuccessful) {
+                Log.w(TAG, "Dnstt fetch failed: HTTP ${response.code}")
+                return emptyList()
+            }
+
+            val body = response.body?.string() ?: return emptyList()
+            val results = mutableListOf<Pair<String, DnsttConfig>>()
+
+            for (line in body.lines()) {
+                val trimmed = line.trim()
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) continue
+                if (!trimmed.startsWith("dns://")) continue
+
+                val config = DnsttConfig.parseUri(trimmed)
+                if (config != null) {
+                    results.add(Pair(trimmed, config))
+                } else {
+                    Log.d(TAG, "Failed to parse dnstt: ${trimmed.take(60)}...")
+                }
+            }
+
+            Log.i(TAG, "Fetched ${results.size} dnstt configs from $url")
+            results
+        } catch (e: Exception) {
+            Log.w(TAG, "Dnstt fetch error from $url: ${e.message}")
+            emptyList()
+        }
+    }
+
+    /**
      * Fetch configs from a remote URL. Each line should be a proxy URI.
      * Supports vless://, vmess://, trojan://, ss:// URIs.
      * Returns list of (originalUri, parsedConfig) pairs.

@@ -20,7 +20,7 @@
 
 ## چگونه کار می‌کند؟
 
-‏MirageVPN ترافیک VPN را به عنوان اتصالات عادی HTTPS از طریق CDN کلادفلر (حالت WebSocket+TLS) پنهان می‌کند، یا از پروتکل REALITY برای تقلید TLS handshake با سایت‌های معتبر استفاده می‌کند. سیستم‌های بازرسی عمیق بسته (DPI) به جای تونل VPN، ترافیک وب عادی می‌بینند.
+‏MirageVPN از سه روش همزمان برای عبور از سانسور استفاده می‌کند: ترافیک HTTPS از طریق CDN کلادفلر (حالت WebSocket+TLS)، پروتکل REALITY برای تقلید TLS handshake با سایت‌های معتبر، و تونل DNS (dnstt) که داده‌ها را در کوئری‌های DNS رمزگذاری می‌کند. اپلیکیشن هر سه روش را همزمان امتحان و از اولین اتصال موفق استفاده می‌کند.
 
 برای جزئیات فنی به [ARCHITECTURE.md](ARCHITECTURE.md) مراجعه کنید (انگلیسی).
 
@@ -35,7 +35,8 @@
 | **VMess** | Widely used, many free configs available |
 | **Trojan** | Looks like normal HTTPS |
 | **Shadowsocks** | Lightweight and fast |
-| **DNS Tunnel** | Data over DNS queries -- hardest to block |
+| **dnstt** | TCP over DNS queries -- hardest to block |
+| **slipstream** | DNS tunneling (legacy) |
 
 </div>
 
@@ -43,8 +44,8 @@
 
 ## ویژگی‌ها
 
-- **چند پروتکله**: پشتیبانی از VLESS، VMess، Trojan، Shadowsocks و تونل DNS
-- **تشخیص خودکار**: اپلیکیشن بر اساس کانفیگ‌های موجود تصمیم می‌گیرد کدام حالت را استفاده کند
+- **چند پروتکله**: پشتیبانی از VLESS، VMess، Trojan، Shadowsocks و تونل DNS (dnstt و slipstream)
+- **مسابقه همزمان**: اپلیکیشن تمام حالت‌های موجود (Xray، dnstt، slipstream) را همزمان امتحان و از اولین اتصال موفق استفاده می‌کند
 - **‏Hot-swap**: تعویض کانفیگ بدون قطعی -- اتصال فعال می‌ماند
 - **امتیازدهی هوشمند**: یاد می‌گیرد کدام سرورها بهتر کار می‌کنند
 - **بهینه‌سازی پس‌زمینه**: خودکار به کانفیگ سریع‌تر سوئیچ می‌کند
@@ -84,9 +85,13 @@ cp android/app/src/main/assets/protocols/trojan/configs.txt.example \
 # Shadowsocks
 cp android/app/src/main/assets/protocols/shadowsocks/configs.txt.example \
    android/app/src/main/assets/protocols/shadowsocks/configs.txt
+
+# dnstt (DNS tunnel)
+cp android/app/src/main/assets/protocols/dnstt/configs.txt.example \
+   android/app/src/main/assets/protocols/dnstt/configs.txt
 ```
 
-‏URI های پروکسی خود را در فایل مربوطه وارد کنید (هر URI در یک خط).
+‏URI های پروکسی خود را در فایل مربوطه وارد کنید (هر URI در یک خط). برای dnstt از فرمت `dns://` استفاده کنید.
 
 ### ۳. تنظیمات اپلیکیشن
 
@@ -139,7 +144,7 @@ docker run --rm -v $(pwd)/output:/output mirage-builder
 | [VMess](docs/VMESS_SETUP.md) | VMess setup |
 | [Trojan](docs/TROJAN_SETUP.md) | Trojan setup |
 | [Shadowsocks](docs/SHADOWSOCKS_SETUP.md) | Shadowsocks setup |
-| [DNS Tunnel](docs/DNS_TUNNEL_SETUP.md) | DNS tunneling (fallback mode) |
+| [DNS Tunnel](docs/DNS_TUNNEL_SETUP.md) | dnstt and slipstream DNS tunneling |
 
 </div>
 
@@ -162,7 +167,7 @@ docker run --rm -v $(pwd)/output:/output mirage-builder
 
 اگر از قبل کانفیگ پروکسی دارید (از برنامه‌هایی مثل v2rayNG، Hiddify، Nekobox یا از کانال‌های تلگرام)، مستقیماً می‌توانید استفاده کنید. فقط URI ها را در فایل پروتکل مربوطه کپی کنید.
 
-پروتکل‌های پشتیبانی‌شده: `vless://`، `vmess://`، `trojan://`، `ss://`
+پروتکل‌های پشتیبانی‌شده: `vless://`، `vmess://`، `trojan://`، `ss://`، `dns://`
 
 ---
 
@@ -201,7 +206,9 @@ See [Scanner README](tools/scanner/README.md) for full documentation.
 
 - ‏[Xray-core](https://github.com/XTLS/Xray-core) -- پیاده‌سازی پروتکل‌های VLESS، VMess، Trojan و Shadowsocks
 - ‏[hev-socks5-tunnel](https://github.com/heiher/hev-socks5-tunnel) -- تبدیل بسته‌های IP به SOCKS5
-- ‏[slipstream](https://github.com/octeep/slipstream) -- تونل DNS
+- ‏[dnstt](https://www.bamsoftware.com/git/dnstt.git) -- تونل DNS از طریق کوئری‌های DNS
+- ‏[microsocks](https://github.com/rofl0r/microsocks) -- پروکسی سبک SOCKS5 برای سمت سرور dnstt
+- ‏[slipstream](https://github.com/octeep/slipstream) -- تونل DNS (قدیمی)
 - ‏[Claude Code](https://claude.ai/claude-code) -- کمک در توسعه، معماری و مستندسازی پروژه
 
 </div>

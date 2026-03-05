@@ -1,0 +1,23 @@
+# dnstt tunnel configs
+# One dns:// URI per line. Lines starting with # are ignored.
+#
+# Format: dns://BASE64(JSON)
+# The JSON contains:
+#   ps       - config name (for display/scoring)
+#   ns       - NS domain (e.g., d1.yourdomain.com)
+#   pubkey   - server's dnstt public key (hex)
+#   addr     - resolver address (IP for UDP, URL for DoH)
+#   transport - "udp" or "doh"
+#
+# Example (UDP via Cloudflare resolver):
+# dns://eyJwcyI6Im15LWNmLXVkcCIsIm5zIjoiZDEueW91cmRvbWFpbi5jb20iLCJwdWJrZXkiOiJhYmNkZWYxMjM0NTY3ODkwIiwiYWRkciI6IjEuMS4xLjEiLCJ0cmFuc3BvcnQiOiJ1ZHAifQ==
+#
+# Example (DoH via Google):
+# dns://eyJwcyI6Im15LWdnLWRvaCIsIm5zIjoiZDEueW91cmRvbWFpbi5jb20iLCJwdWJrZXkiOiJhYmNkZWYxMjM0NTY3ODkwIiwiYWRkciI6Imh0dHBzOi8vOC44LjguOC9kbnMtcXVlcnkiLCJ0cmFuc3BvcnQiOiJkb2gifQ==
+#
+# To generate configs, use the generate_configs.py script or create them manually:
+#   1. Set up dnstt-server on your VPS (see server/dnstt/)
+#   2. Note the public key from server/dnstt/keys/server.pub
+#   3. Create DNS records: A record for ns1.yourdomain.com -> server IP (DNS only!)
+#                          NS record for d1.yourdomain.com -> ns1.yourdomain.com
+#   4. Base64-encode the JSON and prefix with dns://

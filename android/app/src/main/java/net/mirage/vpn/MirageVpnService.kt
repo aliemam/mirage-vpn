@@ -77,6 +77,10 @@ class MirageVpnService : VpnService() {
     private var scoreManager: ConfigScoreManager? = null
     private var configRepository: ConfigRepository? = null
 
+    // dnstt state
+    private var dnsttProcess: Process? = null
+    private var activeDnsttConfig: DnsttConfig? = null
+
     // Popular domains for decoy DNS queries - makes traffic look normal
     // These are domains Iranians commonly visit (mostly Iranian sites)
     private val decoyDomains = listOf(
@@ -154,37 +158,68 @@ class MirageVpnService : VpnService() {
             // Auto-detect available modes based on loaded configs
             val hasXray = configRepository?.hasXrayConfigs() ?: false
             val hasDns = dnsConfig?.isAvailable ?: false
+            val hasDnstt = configRepository?.hasDnsttConfigs() ?: false
+
+            val modeCount = listOf(hasXray, hasDns, hasDnstt).count { it }
 
             val connected = when {
-                hasXray && hasDns -> coroutineScope {
-                    // Both available: race concurrently, first success wins
-                    Log.i(TAG, "Racing Xray and DNS probes concurrently")
-                    val xrayDeferred = async { connectXray() }
-                    val dnsDeferred = async { connectDns() }
-
-                    val xrayOk = xrayDeferred.await()
-                    val dnsOk = dnsDeferred.await()
-
-                    when {
-                        xrayOk && dnsOk -> {
-                            // Both succeeded — prefer Xray (lower latency), cleanup DNS
-                            Log.i(TAG, "Both Xray and DNS succeeded, using Xray")
-                            cleanupDns()
-                            true
-                        }
-                        xrayOk -> true
-                        dnsOk -> {
-                            cleanupXray()
-                            true
-                        }
-                        else -> false
-                    }
-                }
-                hasXray -> connectXray()
-                hasDns -> connectDns()
-                else -> {
-                    Log.e(TAG, "No configs available (no Xray configs, no DNS domains)")
+                modeCount == 0 -> {
+                    Log.e(TAG, "No configs available (no Xray, no DNS, no dnstt)")
                     false
+                }
+                modeCount == 1 -> {
+                    // Single mode — just run it
+                    val success = when {
+                        hasXray -> {
+                            activeTunnelMode = TunnelMode.XRAY
+                            activeSocksPort = ServerConfig.XRAY_SOCKS_PORT
+                            connectXray()
+                        }
+                        hasDnstt -> {
+                            activeTunnelMode = TunnelMode.DNSTT
+                            activeSocksPort = ServerConfig.DNSTT_SOCKS_PORT
+                            connectDnstt()
+                        }
+                        else -> {
+                            activeTunnelMode = TunnelMode.DNS
+                            activeSocksPort = dnsConfig?.listenPort ?: ServerConfig.DNS_LISTEN_PORT
+                            connectDns()
+                        }
+                    }
+                    success
+                }
+                else -> coroutineScope {
+                    // Multiple modes available: race concurrently
+                    Log.i(TAG, "Racing modes: xray=$hasXray dnstt=$hasDnstt dns=$hasDns")
+                    val jobs = mutableListOf<Deferred<Pair<TunnelMode, Boolean>>>()
+
+                    if (hasXray) jobs.add(async { TunnelMode.XRAY to connectXray() })
+                    if (hasDnstt) jobs.add(async { TunnelMode.DNSTT to connectDnstt() })
+                    if (hasDns) jobs.add(async { TunnelMode.DNS to connectDns() })
+
+                    val results = jobs.map { it.await() }.toMap()
+
+                    // Prefer XRAY > DNSTT > DNS among successes
+                    val winner = listOf(TunnelMode.XRAY, TunnelMode.DNSTT, TunnelMode.DNS)
+                        .firstOrNull { results[it] == true }
+
+                    if (winner != null) {
+                        Log.i(TAG, "Race winner: $winner")
+                        // Set tunnel mode and port based on winner
+                        activeTunnelMode = winner
+                        activeSocksPort = when (winner) {
+                            TunnelMode.XRAY -> ServerConfig.XRAY_SOCKS_PORT
+                            TunnelMode.DNSTT -> ServerConfig.DNSTT_SOCKS_PORT
+                            TunnelMode.DNS -> dnsConfig?.listenPort ?: ServerConfig.DNS_LISTEN_PORT
+                        }
+                        // Cleanup losers
+                        if (winner != TunnelMode.XRAY && results.containsKey(TunnelMode.XRAY)) cleanupXray()
+                        if (winner != TunnelMode.DNSTT && results.containsKey(TunnelMode.DNSTT)) cleanupDnstt()
+                        if (winner != TunnelMode.DNS && results.containsKey(TunnelMode.DNS)) cleanupDns()
+                        true
+                    } else {
+                        false
+                    }
                 }
             }
 
@@ -286,9 +321,6 @@ class MirageVpnService : VpnService() {
             return false
         }
 
-        activeTunnelMode = TunnelMode.XRAY
-        activeSocksPort = ServerConfig.XRAY_SOCKS_PORT
-
         Log.i(TAG, "Xray connected successfully via ${xrayManager?.getWorkingConfig()?.name}")
         return true
     }
@@ -388,10 +420,7 @@ class MirageVpnService : VpnService() {
             }
         }
 
-        if (connected) {
-            activeTunnelMode = TunnelMode.DNS
-            activeSocksPort = dnsConfig!!.listenPort
-        } else {
+        if (!connected) {
             dohProxy?.stop()
             dohProxy = null
         }
@@ -514,6 +543,142 @@ class MirageVpnService : VpnService() {
         dohProxy = null
     }
 
+    /**
+     * Connect using dnstt DNS tunneling.
+     * dnstt-client creates a TCP tunnel through DNS queries.
+     * Chain: tun2socks → dnstt-client (local SOCKS) → DNS tunnel → dnstt-server → microsocks → internet
+     */
+    private suspend fun connectDnstt(): Boolean {
+        Log.i(TAG, "Connecting via dnstt...")
+
+        // Refresh dnstt configs from remote
+        try {
+            configRepository?.refreshDnsttFromRemote(config.remoteConfigUrl)
+        } catch (e: Exception) {
+            Log.w(TAG, "Remote dnstt config refresh failed (will use local/bundled): ${e.message}")
+        }
+
+        val configs = configRepository?.getQuickProbeDnsttConfigs(scoreManager!!) ?: emptyList()
+        if (configs.isEmpty()) {
+            Log.e(TAG, "No dnstt configs available")
+            return false
+        }
+
+        // Extract dnstt binary
+        val binaryPath = extractDnsttBinary()
+        if (binaryPath == null) {
+            Log.e(TAG, "dnstt binary not found")
+            return false
+        }
+
+        // Try configs in order (scored)
+        sendStatus(getString(R.string.status_probing), false)
+        for ((index, dnsttConfig) in configs.withIndex()) {
+            sendProbeProgress(index + 1, configs.size, dnsttConfig.name)
+            Log.d(TAG, "Trying dnstt config ${index + 1}/${configs.size}: ${dnsttConfig.name}")
+
+            // Kill any existing dnstt process
+            dnsttProcess?.destroy()
+            dnsttProcess = null
+
+            startDnsttClient(binaryPath, dnsttConfig)
+
+            // Wait for tunnel to be ready
+            delay(3000)
+
+            if (isSocksAlive(ServerConfig.DNSTT_SOCKS_PORT)) {
+                activeDnsttConfig = dnsttConfig
+                scoreManager?.recordSuccess(DnsttConfig.configId(dnsttConfig), 0)
+                Log.i(TAG, "dnstt connected via ${dnsttConfig.name}")
+                return true
+            } else {
+                Log.w(TAG, "dnstt config ${dnsttConfig.name} failed, trying next...")
+                scoreManager?.recordFailure(DnsttConfig.configId(dnsttConfig))
+                dnsttProcess?.destroy()
+                dnsttProcess = null
+            }
+        }
+
+        Log.e(TAG, "All dnstt configs failed")
+        return false
+    }
+
+    /**
+     * Extract dnstt binary path from native libraries.
+     */
+    private fun extractDnsttBinary(): String? {
+        val nativeLibDir = applicationInfo.nativeLibraryDir
+        val binary = File(nativeLibDir, "libdnstt.so")
+        if (binary.exists()) {
+            Log.d(TAG, "Found dnstt binary at: ${binary.absolutePath}")
+            return binary.absolutePath
+        }
+        Log.e(TAG, "dnstt binary not found in $nativeLibDir")
+        return null
+    }
+
+    /**
+     * Start dnstt-client process.
+     *
+     * dnstt-client usage:
+     *   dnstt-client [-udp ADDR|-doh URL|-dot ADDR] -pubkey HEX DOMAIN LOCAL_ADDR
+     */
+    private fun startDnsttClient(binaryPath: String, config: DnsttConfig) {
+        val cmd = mutableListOf(binaryPath)
+
+        // Transport flag
+        when (config.transport) {
+            "doh" -> {
+                cmd.add("-doh")
+                cmd.add(config.resolver)
+            }
+            "dot" -> {
+                cmd.add("-dot")
+                cmd.add(config.resolver)
+            }
+            else -> {
+                // Default: UDP
+                cmd.add("-udp")
+                val resolver = if (config.resolver.contains(":")) config.resolver
+                               else "${config.resolver}:53"
+                cmd.add(resolver)
+            }
+        }
+
+        cmd.add("-pubkey")
+        cmd.add(config.pubkey)
+        cmd.add(config.nsDomain)
+        cmd.add("127.0.0.1:${ServerConfig.DNSTT_SOCKS_PORT}")
+
+        Log.d(TAG, "Starting dnstt-client: ${cmd.joinToString(" ")}")
+
+        val processBuilder = ProcessBuilder(cmd)
+            .redirectErrorStream(true)
+            .directory(filesDir)
+
+        dnsttProcess = processBuilder.start()
+
+        // Log output in background
+        serviceScope.launch {
+            try {
+                dnsttProcess?.inputStream?.bufferedReader()?.forEachLine { line ->
+                    Log.d(TAG, "dnstt: $line")
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "dnstt logging stopped")
+            }
+        }
+    }
+
+    /**
+     * Clean up dnstt resources.
+     */
+    private fun cleanupDnstt() {
+        dnsttProcess?.destroy()
+        dnsttProcess = null
+        activeDnsttConfig = null
+    }
+
     private fun establishVpn() {
         val builder = Builder()
             .setSession(config.displayName)
@@ -626,6 +791,13 @@ class MirageVpnService : VpnService() {
                 socksAlive && xrayRunning
             }
             TunnelMode.DNS -> isTunnelAlive()
+            TunnelMode.DNSTT -> {
+                val socksAlive = isSocksAlive(ServerConfig.DNSTT_SOCKS_PORT)
+                val processAlive = dnsttProcess?.isAlive ?: false
+                if (!socksAlive) Log.w(TAG, "Health: dnstt SOCKS port not responding")
+                if (!processAlive) Log.w(TAG, "Health: dnstt process not alive")
+                socksAlive && processAlive
+            }
         }
     }
 
@@ -687,6 +859,22 @@ class MirageVpnService : VpnService() {
                     }
                 }
 
+                if (activeTunnelMode == TunnelMode.DNSTT) {
+                    // dnstt reconnect: restart process, try next config
+                    Log.i(TAG, "Trying to restart dnstt tunnel...")
+                    cleanupDnstt()
+                    delay(300)
+                    val dnsttOk = connectDnstt()
+                    if (dnsttOk) {
+                        restartTun2Socks(activeSocksPort)
+                        Log.i(TAG, "Reconnected via dnstt tunnel")
+                        reconnectAttempts = 0
+                        sendStatus(getString(R.string.status_connected), true)
+                        updateNotification(getString(R.string.status_connected))
+                        return
+                    }
+                }
+
                 if (activeTunnelMode == TunnelMode.DNS) {
                     // DNS reconnect: try restarting tunnel with current domain
                     Log.i(TAG, "Trying to restart DNS tunnel...")
@@ -706,25 +894,30 @@ class MirageVpnService : VpnService() {
 
             if (!isRunning) return
 
-            // All same-mode attempts exhausted — try switching to the other mode
-            Log.i(TAG, "Same-mode reconnection exhausted, trying alternative mode...")
+            // All same-mode attempts exhausted — try alternative modes
+            Log.i(TAG, "Same-mode reconnection exhausted, trying alternative modes...")
 
-            if (activeTunnelMode == TunnelMode.XRAY && dnsConfig?.isAvailable == true) {
-                Log.i(TAG, "Switching from Xray to DNS tunnel...")
+            // Build list of alternative modes to try (priority: XRAY > DNSTT > DNS)
+            val alternatives = mutableListOf<Pair<TunnelMode, suspend () -> Boolean>>()
+            if (activeTunnelMode != TunnelMode.XRAY && configRepository?.hasXrayConfigs() == true) {
+                alternatives.add(TunnelMode.XRAY to suspend { connectXray() })
+            }
+            if (activeTunnelMode != TunnelMode.DNSTT && configRepository?.hasDnsttConfigs() == true) {
+                alternatives.add(TunnelMode.DNSTT to suspend { connectDnstt() })
+            }
+            if (activeTunnelMode != TunnelMode.DNS && dnsConfig?.isAvailable == true) {
+                alternatives.add(TunnelMode.DNS to suspend { connectDns() })
+            }
+
+            for ((mode, connector) in alternatives) {
+                Log.i(TAG, "Trying alternative mode: $mode")
+                // Cleanup current mode
                 cleanupXray()
-                val dnsOk = connectDns()
-                if (dnsOk) {
-                    restartTun2Socks(activeSocksPort)
-                    reconnectAttempts = 0
-                    sendStatus(getString(R.string.status_connected), true)
-                    updateNotification(getString(R.string.status_connected))
-                    return
-                }
-            } else if (activeTunnelMode == TunnelMode.DNS && configRepository?.hasXrayConfigs() == true) {
-                Log.i(TAG, "Switching from DNS to Xray...")
+                cleanupDnstt()
                 cleanupDns()
-                val xrayOk = connectXray()
-                if (xrayOk) {
+
+                val ok = connector()
+                if (ok) {
                     restartTun2Socks(activeSocksPort)
                     reconnectAttempts = 0
                     sendStatus(getString(R.string.status_connected), true)
@@ -734,7 +927,7 @@ class MirageVpnService : VpnService() {
             }
 
             // Everything failed
-            Log.e(TAG, "All reconnect attempts failed (both modes)")
+            Log.e(TAG, "All reconnect attempts failed (all modes)")
             sendStatus(getString(R.string.status_connection_lost), true)
             updateNotification(getString(R.string.status_connection_lost))
         } finally {
@@ -902,6 +1095,11 @@ class MirageVpnService : VpnService() {
             xrayManager?.stop()
             xrayManager = null
 
+            // Stop dnstt
+            dnsttProcess?.destroy()
+            dnsttProcess = null
+            activeDnsttConfig = null
+
             tunnelProcess?.destroy()
             tunnelProcess = null
 
@@ -987,6 +1185,9 @@ class MirageVpnService : VpnService() {
         }
         xrayManager?.stop()
         xrayManager = null
+        dnsttProcess?.destroy()
+        dnsttProcess = null
+        activeDnsttConfig = null
         dohProxy?.stop()
         dohProxy = null
         tunnelProcess?.destroy()

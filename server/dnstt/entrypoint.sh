@@ -14,26 +14,17 @@ if [ ! -f /keys/server.key ]; then
     echo ""
 fi
 
-# Setup SSH server for tunneling
-if [ ! -f /etc/ssh/ssh_host_rsa_key ]; then
-    ssh-keygen -A
-fi
-
-# Create tunnel user if not exists
-if ! id "tunnel" &>/dev/null; then
-    adduser -D -s /bin/sh tunnel
-    echo "tunnel:${TUNNEL_PASSWORD:-changeme}" | chpasswd
-fi
-
-# Start SSH daemon in background
-/usr/sbin/sshd
+# Start microsocks SOCKS5 proxy on localhost
+# dnstt-server forwards decoded tunnel traffic to this
+echo "Starting microsocks on 127.0.0.1:1080..."
+microsocks -i 127.0.0.1 -p 1080 &
 
 echo "Starting dnstt-server..."
 echo "Domain: ${DNSTT_DOMAIN}"
-echo "Forwarding to: 127.0.0.1:22 (SSH)"
+echo "Forwarding to: 127.0.0.1:1080 (microsocks SOCKS5)"
 
 exec dnstt-server \
     -udp ":5300" \
     -privkey-file /keys/server.key \
     "${DNSTT_DOMAIN}" \
-    127.0.0.1:22
+    127.0.0.1:1080

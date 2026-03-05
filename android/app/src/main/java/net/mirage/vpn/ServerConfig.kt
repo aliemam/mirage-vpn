@@ -10,7 +10,8 @@ import java.io.File
  */
 enum class TunnelMode {
     DNS,    // DNS tunneling via slipstream
-    XRAY    // Xray-core (VLESS, VMess, Trojan, Shadowsocks)
+    XRAY,   // Xray-core (VLESS, VMess, Trojan, Shadowsocks)
+    DNSTT   // DNS tunneling via dnstt
 }
 
 /**
@@ -45,6 +46,7 @@ data class ServerConfig(
         const val XRAY_SOCKS_PORT = 10808
         const val DNS_LISTEN_PORT = 5201
         const val DOH_PORT = 5353
+        const val DNSTT_SOCKS_PORT = 5202
 
         fun load(context: Context): ServerConfig {
             val configFile = File(context.filesDir, CONFIG_FILE)

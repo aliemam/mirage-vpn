@@ -24,19 +24,26 @@ class ConfigRepository(private val context: Context) {
         val XRAY_PROTOCOLS = listOf("vless", "vmess", "trojan", "shadowsocks")
     }
 
-    // uri -> ProxyConfig (unified across all protocols)
+    // uri -> ProxyConfig (unified across all Xray protocols)
     private val configs = mutableMapOf<String, ProxyConfig>()
+
+    // uri -> DnsttConfig (separate from Xray configs)
+    private val dnsttConfigs = mutableMapOf<String, DnsttConfig>()
 
     // Track which protocols have configs (for logging/debugging)
     private val availableProtocols = mutableSetOf<String>()
 
     init {
         loadAllLocal()
+        loadDnsttLocal()
         if (configs.isEmpty()) {
             loadAllBundledAssets()
         }
+        if (dnsttConfigs.isEmpty()) {
+            loadDnsttBundled()
+        }
         expandWithGridSearch()
-        Log.i(TAG, "Initialized with ${configs.size} configs from protocols: $availableProtocols")
+        Log.i(TAG, "Initialized with ${configs.size} Xray + ${dnsttConfigs.size} dnstt configs from protocols: $availableProtocols")
     }
 
     /**
@@ -96,9 +103,45 @@ class ConfigRepository(private val context: Context) {
             }
         }
 
+        // Also refresh dnstt configs
+        refreshDnsttFromRemote(normalizedBase)
+
         expandWithGridSearch()
-        Log.i(TAG, "Remote refresh total: $totalNew new, ${configs.size} total")
+        Log.i(TAG, "Remote refresh total: $totalNew new Xray, ${configs.size} Xray + ${dnsttConfigs.size} dnstt total")
         return totalNew
+    }
+
+    /**
+     * Refresh dnstt configs from remote.
+     * URL: {baseUrl}/protocols/dnstt/configs.txt
+     * Returns number of new configs added.
+     */
+    fun refreshDnsttFromRemote(baseUrl: String): Int {
+        if (baseUrl.isBlank()) return 0
+        val normalizedBase = baseUrl.trimEnd('/')
+        val url = "$normalizedBase/protocols/dnstt/configs.txt"
+
+        return try {
+            val fetched = RemoteConfigFetcher.fetchDnstt(url)
+            if (fetched.isEmpty()) return 0
+
+            var newCount = 0
+            for ((uri, config) in fetched) {
+                if (!dnsttConfigs.containsKey(uri)) {
+                    dnsttConfigs[uri] = config
+                    newCount++
+                }
+            }
+
+            saveDnsttConfigs(fetched.map { it.first })
+            if (fetched.isNotEmpty()) availableProtocols.add("dnstt")
+
+            Log.d(TAG, "Remote dnstt: ${fetched.size} fetched, $newCount new")
+            newCount
+        } catch (e: Exception) {
+            Log.w(TAG, "Remote dnstt fetch failed: ${e.message}")
+            0
+        }
     }
 
     /**
@@ -197,8 +240,55 @@ class ConfigRepository(private val context: Context) {
         return RemoteConfigFetcher.configId(uri)
     }
 
+    // ========== dnstt Accessors ==========
+
     /**
-     * Get config count.
+     * Check if any dnstt configs are available.
+     */
+    fun hasDnsttConfigs(): Boolean = dnsttConfigs.isNotEmpty()
+
+    /**
+     * Get all dnstt configs.
+     */
+    fun getAllDnsttConfigs(): List<DnsttConfig> = dnsttConfigs.values.toList()
+
+    /**
+     * Get quick-probe dnstt configs: top scored + shuffled new ones.
+     */
+    fun getQuickProbeDnsttConfigs(scoreManager: ConfigScoreManager): List<DnsttConfig> {
+        val targetCount = 15
+        val allEntries = dnsttConfigs.entries.toList()
+
+        for ((_, config) in allEntries) {
+            val id = DnsttConfig.configId(config)
+            scoreManager.ensureEntry(id)
+        }
+
+        val topIds = scoreManager.getTopScoredIds(targetCount).toSet()
+
+        val topConfigs = mutableListOf<DnsttConfig>()
+        val remaining = mutableListOf<DnsttConfig>()
+
+        for ((_, config) in allEntries) {
+            val id = DnsttConfig.configId(config)
+            if (id in topIds) {
+                topConfigs.add(config)
+            } else {
+                remaining.add(config)
+            }
+        }
+
+        if (topConfigs.size < targetCount && remaining.isNotEmpty()) {
+            val needed = targetCount - topConfigs.size
+            topConfigs.addAll(remaining.shuffled().take(needed))
+        }
+
+        Log.d(TAG, "Quick probe dnstt: ${topConfigs.size} configs")
+        return topConfigs
+    }
+
+    /**
+     * Get config count (Xray only).
      */
     fun size(): Int = configs.size
 
@@ -328,6 +418,73 @@ class ConfigRepository(private val context: Context) {
             Log.d(TAG, "Saved ${uris.size} URIs to $protocol folder")
         } catch (e: Exception) {
             Log.w(TAG, "Failed to save $protocol configs: ${e.message}")
+        }
+    }
+
+    // ========== dnstt Loading ==========
+
+    private fun loadDnsttLocal() {
+        try {
+            val file = File(context.filesDir, "protocols/dnstt/configs.txt")
+            if (!file.exists()) return
+
+            val lines = file.readLines()
+            var count = 0
+            for (line in lines) {
+                val trimmed = line.trim()
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) continue
+                if (!trimmed.startsWith("dns://")) continue
+
+                val config = DnsttConfig.parseUri(trimmed)
+                if (config != null) {
+                    dnsttConfigs[trimmed] = config
+                    count++
+                }
+            }
+            if (count > 0) {
+                availableProtocols.add("dnstt")
+                Log.d(TAG, "Loaded $count dnstt configs from local cache")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to load local dnstt configs: ${e.message}")
+        }
+    }
+
+    private fun loadDnsttBundled() {
+        try {
+            val input = context.assets.open("protocols/dnstt/configs.txt")
+            val lines = input.bufferedReader().readLines()
+            input.close()
+
+            var count = 0
+            for (line in lines) {
+                val trimmed = line.trim()
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) continue
+                if (!trimmed.startsWith("dns://")) continue
+
+                val config = DnsttConfig.parseUri(trimmed)
+                if (config != null) {
+                    dnsttConfigs[trimmed] = config
+                    count++
+                }
+            }
+            if (count > 0) {
+                availableProtocols.add("dnstt")
+                Log.d(TAG, "Loaded $count dnstt configs from bundled asset")
+            }
+        } catch (e: Exception) {
+            // Expected if no bundled dnstt configs
+        }
+    }
+
+    private fun saveDnsttConfigs(uris: List<String>) {
+        try {
+            val dir = File(context.filesDir, "protocols/dnstt")
+            dir.mkdirs()
+            File(dir, "configs.txt").writeText(uris.joinToString("\n"))
+            Log.d(TAG, "Saved ${uris.size} dnstt URIs")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to save dnstt configs: ${e.message}")
         }
     }
 

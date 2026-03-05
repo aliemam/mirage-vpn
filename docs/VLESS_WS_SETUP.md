@@ -152,6 +152,46 @@ nginx -t && systemctl restart nginx
 
 چون Cloudflare خودش TLS را مدیریت می‌کند (با ابر نارنجی روشن)، نیازی به گواهی TLS روی سرور ندارید.
 
+**نکته مهم:** حالت SSL/TLS در Cloudflare باید روی **Flexible** تنظیم شود. با این تنظیم، Cloudflare اتصال TLS را از سمت کاربر قبول و ترافیک را به پورت ۸۰ (HTTP) سرور ارسال می‌کند.
+
+**روش ساده‌تر (بدون nginx):** اگر از Cloudflare با حالت Flexible SSL استفاده می‌کنید، می‌توانید Xray را مستقیماً روی پورت ۸۰ تنظیم کنید و نیازی به nginx نیست:
+
+```json
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "port": 80,
+      "listen": "0.0.0.0",
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "YOUR-GENERATED-UUID",
+            "level": 0
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "ws",
+        "wsSettings": {
+          "path": "/ws"
+        }
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "freedom",
+      "settings": {}
+    }
+  ]
+}
+```
+
 ## مرحله ۸: راه‌اندازی Xray
 
 ```bash

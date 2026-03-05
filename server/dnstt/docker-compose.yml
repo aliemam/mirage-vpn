@@ -1,19 +1,15 @@
-version: '3.8'
-
 services:
   dnstt:
     build: .
     container_name: dnstt-server
     restart: unless-stopped
-    network_mode: host  # Required for iptables port forwarding
+    network_mode: host
     cap_add:
-      - NET_ADMIN  # Required for iptables
+      - NET_ADMIN
     environment:
-      - DNSTT_DOMAIN=${DNSTT_DOMAIN:-t.yourdomain.com}
-      - TUNNEL_PASSWORD=${TUNNEL_PASSWORD:-changeme}
+      - DNSTT_DOMAIN=${DNSTT_DOMAIN:-d1.yourdomain.com}
     volumes:
       - ./keys:/keys
-      - ./ssh_authorized_keys:/home/tunnel/.ssh/authorized_keys:ro
     logging:
       driver: json-file
       options:
