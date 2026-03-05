@@ -59,29 +59,42 @@ data class DnsConfig(
             "https://doh.opendns.com/dns-query",
         )
 
-        // Safe DNS resolvers - NOT controlled by Iranian government
+        // DNS resolvers - includes Iranian domestic resolvers that can't be blocked
         val DEFAULT_RESOLVERS = listOf(
-            // Cloudflare - Fast, privacy-focused
+            // Iranian domestic DNS (can't be blocked - part of IR infrastructure)
+            "10.202.10.10",       // TUMS (Tehran University)
+            "10.202.10.11",       // TUMS secondary
+            "178.22.122.100",     // Mabna Telecom
+            "185.51.200.2",       // Asiatech
+            "5.202.100.100",      // Hostiran
+            "5.202.100.101",      // Hostiran secondary
+            "217.219.226.98",     // Iran Telecom TCI
+            "77.36.130.2",        // IRIB (state broadcasting)
+            "185.181.182.209",    // Islamic Sciences Research
+            "212.86.76.69",       // Homaye Jahan Nama
+            "185.225.80.200",     // Hormoz IT
+            "194.180.11.149",     // Vandad Vira
+            "93.126.29.96",       // Asmanfaraz Isfahan
+            "212.86.72.91",       // Homaye Jahan Nama
+            "178.252.184.141",    // Mabna (alternate)
+            // Azure South Africa (less likely blocked)
+            "102.37.163.100",     // Azure SA
+            "102.37.163.101",     // Azure SA secondary
+            // Vercara/Neustar UltraDNS
+            "156.154.70.1",       // Vercara
+            "156.154.71.1",       // Vercara secondary
+            // International (may be blocked in Iran)
+            "77.88.8.1",          // Yandex (Russia)
+            "223.5.5.5",          // Alibaba (China)
+            // Cloudflare
             "1.1.1.1",
             "1.0.0.1",
-            // Google - Reliable, widely used
+            // Google
             "8.8.8.8",
             "8.8.4.4",
-            // Quad9 - Security-focused, blocks malware
+            // Quad9
             "9.9.9.9",
             "149.112.112.112",
-            // OpenDNS - Cisco owned
-            "208.67.222.222",
-            "208.67.220.220",
-            // AdGuard DNS
-            "94.140.14.14",
-            "94.140.15.15",
-            // CleanBrowsing
-            "185.228.168.9",
-            "185.228.169.9",
-            // Comodo Secure DNS
-            "8.26.56.26",
-            "8.20.247.20",
         )
 
         /**

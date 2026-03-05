@@ -33,6 +33,10 @@ class ConfigRepository(private val context: Context) {
     // Track which protocols have configs (for logging/debugging)
     private val availableProtocols = mutableSetOf<String>()
 
+    // Protocol filter: which protocols are enabled by user
+    private var enabledXrayProtocols: Set<String>? = null  // null = all enabled
+    private var dnsttEnabled: Boolean = true
+
     init {
         loadAllLocal()
         loadDnsttLocal()
@@ -166,19 +170,48 @@ class ConfigRepository(private val context: Context) {
     }
 
     /**
-     * Get all configs currently in memory.
+     * Set which Xray protocols are enabled (filters getAllConfigs, hasXrayConfigs, etc.).
+     * Pass null to enable all protocols.
      */
-    fun getAllConfigs(): List<ProxyConfig> = configs.values.toList()
+    fun setEnabledProtocols(protocols: Set<String>?) {
+        enabledXrayProtocols = protocols
+    }
 
     /**
-     * Get all config URIs currently in memory.
+     * Set whether dnstt is enabled (filters hasDnsttConfigs, getAllDnsttConfigs, etc.).
      */
-    fun getAllUris(): List<String> = configs.keys.toList()
+    fun setDnsttEnabled(enabled: Boolean) {
+        dnsttEnabled = enabled
+    }
+
+    /** Get the protocol name for a ProxyConfig. */
+    private fun protocolOf(config: ProxyConfig): String = when (config) {
+        is ProxyConfig.VlessTls, is ProxyConfig.Reality -> "vless"
+        is ProxyConfig.VMess -> "vmess"
+        is ProxyConfig.Trojan -> "trojan"
+        is ProxyConfig.Shadowsocks -> "shadowsocks"
+    }
+
+    /** Filter configs by enabled protocols. */
+    private fun filteredConfigs(): Map<String, ProxyConfig> {
+        val enabled = enabledXrayProtocols ?: return configs
+        return configs.filter { (_, config) -> protocolOf(config) in enabled }
+    }
 
     /**
-     * Check if any Xray protocol configs are available.
+     * Get all configs currently in memory (filtered by enabled protocols).
      */
-    fun hasXrayConfigs(): Boolean = configs.isNotEmpty()
+    fun getAllConfigs(): List<ProxyConfig> = filteredConfigs().values.toList()
+
+    /**
+     * Get all config URIs currently in memory (filtered by enabled protocols).
+     */
+    fun getAllUris(): List<String> = filteredConfigs().keys.toList()
+
+    /**
+     * Check if any Xray protocol configs are available (respects protocol filter).
+     */
+    fun hasXrayConfigs(): Boolean = filteredConfigs().isNotEmpty()
 
     /**
      * Get set of protocol names that have configs loaded.
@@ -190,7 +223,7 @@ class ConfigRepository(private val context: Context) {
      */
     fun getQuickProbeConfigs(scoreManager: ConfigScoreManager): List<ProxyConfig> {
         val targetCount = 25
-        val allEntries = configs.entries.toList()
+        val allEntries = filteredConfigs().entries.toList()
 
         // Ensure all configs have score entries
         for ((uri, _) in allEntries) {
@@ -243,19 +276,20 @@ class ConfigRepository(private val context: Context) {
     // ========== dnstt Accessors ==========
 
     /**
-     * Check if any dnstt configs are available.
+     * Check if any dnstt configs are available (respects dnstt filter).
      */
-    fun hasDnsttConfigs(): Boolean = dnsttConfigs.isNotEmpty()
+    fun hasDnsttConfigs(): Boolean = dnsttEnabled && dnsttConfigs.isNotEmpty()
 
     /**
-     * Get all dnstt configs.
+     * Get all dnstt configs (respects dnstt filter).
      */
-    fun getAllDnsttConfigs(): List<DnsttConfig> = dnsttConfigs.values.toList()
+    fun getAllDnsttConfigs(): List<DnsttConfig> = if (dnsttEnabled) dnsttConfigs.values.toList() else emptyList()
 
     /**
-     * Get quick-probe dnstt configs: top scored + shuffled new ones.
+     * Get quick-probe dnstt configs: top scored + shuffled new ones (respects dnstt filter).
      */
     fun getQuickProbeDnsttConfigs(scoreManager: ConfigScoreManager): List<DnsttConfig> {
+        if (!dnsttEnabled) return emptyList()
         val targetCount = 15
         val allEntries = dnsttConfigs.entries.toList()
 

@@ -31,16 +31,28 @@ class MirageVpnService : VpnService() {
         const val TAG = "MirageVPN"
         const val ACTION_CONNECT = "net.mirage.vpn.CONNECT"
         const val ACTION_DISCONNECT = "net.mirage.vpn.DISCONNECT"
+        const val ACTION_CANCEL = "net.mirage.vpn.CANCEL"
+        const val ACTION_START_HTTP_PROXY = "net.mirage.vpn.START_HTTP_PROXY"
+        const val ACTION_STOP_HTTP_PROXY = "net.mirage.vpn.STOP_HTTP_PROXY"
         const val ACTION_STATUS_UPDATE = "net.mirage.vpn.STATUS_UPDATE"
         const val ACTION_PROBE_PROGRESS = "net.mirage.vpn.PROBE_PROGRESS"
+        const val ACTION_HTTP_PROXY_STATUS = "net.mirage.vpn.HTTP_PROXY_STATUS"
         const val EXTRA_STATUS = "status"
         const val EXTRA_CONNECTED = "connected"
+        const val EXTRA_IS_CONNECTING = "is_connecting"
         const val EXTRA_PROBE_CURRENT = "probe_current"
         const val EXTRA_PROBE_TOTAL = "probe_total"
         const val EXTRA_PROBE_SNI = "probe_sni"
+        const val EXTRA_HTTP_PROXY_RUNNING = "http_proxy_running"
+        const val EXTRA_HTTP_PROXY_ADDRESS = "http_proxy_address"
 
         private const val NOTIFICATION_CHANNEL_ID = "mirage_vpn_channel"
         private const val NOTIFICATION_ID = 1
+
+        // Timeout constants
+        private const val CONNECT_TIMEOUT_MS = 90_000L
+        private const val DNSTT_CONNECT_TIMEOUT_MS = 60_000L
+        private const val DNS_CONNECT_TIMEOUT_MS = 60_000L
 
         // Health monitor constants
         private const val HEALTH_CHECK_INTERVAL_MS = 15_000L
@@ -70,12 +82,21 @@ class MirageVpnService : VpnService() {
     private var isReconnecting = false
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
+    // Connection job (for cancellation support)
+    private var connectJob: Job? = null
+
     // Background optimizer
     private var backgroundOptimizer: BackgroundOptimizer? = null
 
     // Dynamic config scoring and repository
     private var scoreManager: ConfigScoreManager? = null
     private var configRepository: ConfigRepository? = null
+
+    // Protocol preferences
+    private var protocolPreferences: ProtocolPreferences? = null
+
+    // HTTP proxy for internet sharing
+    private var httpProxyServer: HttpProxyServer? = null
 
     // dnstt state
     private var dnsttProcess: Process? = null
@@ -121,16 +142,28 @@ class MirageVpnService : VpnService() {
         dnsConfig = DnsConfig.load(this)
         scoreManager = ConfigScoreManager(this)
         configRepository = ConfigRepository(this)
+        protocolPreferences = ProtocolPreferences(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_CONNECT -> {
                 startForeground(NOTIFICATION_ID, createNotification(getString(R.string.status_connecting)))
-                serviceScope.launch { connect() }
+                connectJob = serviceScope.launch { connect() }
             }
             ACTION_DISCONNECT -> {
                 serviceScope.launch { disconnect() }
+            }
+            ACTION_CANCEL -> {
+                Log.i(TAG, "Connection cancelled by user")
+                connectJob?.cancel()
+                connectJob = null
+            }
+            ACTION_START_HTTP_PROXY -> {
+                startHttpProxy()
+            }
+            ACTION_STOP_HTTP_PROXY -> {
+                stopHttpProxy()
             }
         }
         return START_STICKY
@@ -153,78 +186,91 @@ class MirageVpnService : VpnService() {
 
     private suspend fun connect() {
         try {
-            sendStatus(getString(R.string.status_connecting), false)
+            sendStatus(getString(R.string.status_connecting), false, isConnecting = true)
 
-            // Auto-detect available modes based on loaded configs
-            val hasXray = configRepository?.hasXrayConfigs() ?: false
-            val hasDns = dnsConfig?.isAvailable ?: false
-            val hasDnstt = configRepository?.hasDnsttConfigs() ?: false
+            // Apply protocol preferences to filter configs
+            protocolPreferences?.let { prefs ->
+                configRepository?.setEnabledProtocols(prefs.getEnabledXrayProtocols())
+                configRepository?.setDnsttEnabled(prefs.dnsttEnabled)
+            }
 
-            val modeCount = listOf(hasXray, hasDns, hasDnstt).count { it }
+            // Overall connection timeout
+            val connected = withTimeoutOrNull(CONNECT_TIMEOUT_MS) {
 
-            val connected = when {
-                modeCount == 0 -> {
-                    Log.e(TAG, "No configs available (no Xray, no DNS, no dnstt)")
-                    false
-                }
-                modeCount == 1 -> {
-                    // Single mode — just run it
-                    val success = when {
-                        hasXray -> {
-                            activeTunnelMode = TunnelMode.XRAY
-                            activeSocksPort = ServerConfig.XRAY_SOCKS_PORT
-                            connectXray()
-                        }
-                        hasDnstt -> {
-                            activeTunnelMode = TunnelMode.DNSTT
-                            activeSocksPort = ServerConfig.DNSTT_SOCKS_PORT
-                            connectDnstt()
-                        }
-                        else -> {
-                            activeTunnelMode = TunnelMode.DNS
-                            activeSocksPort = dnsConfig?.listenPort ?: ServerConfig.DNS_LISTEN_PORT
-                            connectDns()
+                // Auto-detect available modes based on loaded configs
+                val hasXray = configRepository?.hasXrayConfigs() ?: false
+                val hasDns = dnsConfig?.isAvailable ?: false
+                val hasDnstt = configRepository?.hasDnsttConfigs() ?: false
+
+                val modeCount = listOf(hasXray, hasDns, hasDnstt).count { it }
+
+                when {
+                    modeCount == 0 -> {
+                        Log.e(TAG, "No configs available (no Xray, no DNS, no dnstt)")
+                        false
+                    }
+                    modeCount == 1 -> {
+                        // Single mode — just run it
+                        when {
+                            hasXray -> {
+                                activeTunnelMode = TunnelMode.XRAY
+                                activeSocksPort = ServerConfig.XRAY_SOCKS_PORT
+                                connectXray()
+                            }
+                            hasDnstt -> {
+                                activeTunnelMode = TunnelMode.DNSTT
+                                activeSocksPort = ServerConfig.DNSTT_SOCKS_PORT
+                                connectDnstt()
+                            }
+                            else -> {
+                                activeTunnelMode = TunnelMode.DNS
+                                activeSocksPort = dnsConfig?.listenPort ?: ServerConfig.DNS_LISTEN_PORT
+                                connectDns()
+                            }
                         }
                     }
-                    success
-                }
-                else -> coroutineScope {
-                    // Multiple modes available: race concurrently
-                    Log.i(TAG, "Racing modes: xray=$hasXray dnstt=$hasDnstt dns=$hasDns")
-                    val jobs = mutableListOf<Deferred<Pair<TunnelMode, Boolean>>>()
+                    else -> coroutineScope {
+                        // Multiple modes available: race concurrently
+                        Log.i(TAG, "Racing modes: xray=$hasXray dnstt=$hasDnstt dns=$hasDns")
+                        val jobs = mutableListOf<Deferred<Pair<TunnelMode, Boolean>>>()
 
-                    if (hasXray) jobs.add(async { TunnelMode.XRAY to connectXray() })
-                    if (hasDnstt) jobs.add(async { TunnelMode.DNSTT to connectDnstt() })
-                    if (hasDns) jobs.add(async { TunnelMode.DNS to connectDns() })
+                        if (hasXray) jobs.add(async { TunnelMode.XRAY to connectXray() })
+                        if (hasDnstt) jobs.add(async { TunnelMode.DNSTT to connectDnstt() })
+                        if (hasDns) jobs.add(async { TunnelMode.DNS to connectDns() })
 
-                    val results = jobs.map { it.await() }.toMap()
+                        val results = jobs.map { it.await() }.toMap()
 
-                    // Prefer XRAY > DNSTT > DNS among successes
-                    val winner = listOf(TunnelMode.XRAY, TunnelMode.DNSTT, TunnelMode.DNS)
-                        .firstOrNull { results[it] == true }
+                        // Prefer XRAY > DNSTT > DNS among successes
+                        val winner = listOf(TunnelMode.XRAY, TunnelMode.DNSTT, TunnelMode.DNS)
+                            .firstOrNull { results[it] == true }
 
-                    if (winner != null) {
-                        Log.i(TAG, "Race winner: $winner")
-                        // Set tunnel mode and port based on winner
-                        activeTunnelMode = winner
-                        activeSocksPort = when (winner) {
-                            TunnelMode.XRAY -> ServerConfig.XRAY_SOCKS_PORT
-                            TunnelMode.DNSTT -> ServerConfig.DNSTT_SOCKS_PORT
-                            TunnelMode.DNS -> dnsConfig?.listenPort ?: ServerConfig.DNS_LISTEN_PORT
+                        if (winner != null) {
+                            Log.i(TAG, "Race winner: $winner")
+                            activeTunnelMode = winner
+                            activeSocksPort = when (winner) {
+                                TunnelMode.XRAY -> ServerConfig.XRAY_SOCKS_PORT
+                                TunnelMode.DNSTT -> ServerConfig.DNSTT_SOCKS_PORT
+                                TunnelMode.DNS -> dnsConfig?.listenPort ?: ServerConfig.DNS_LISTEN_PORT
+                            }
+                            // Cleanup losers
+                            if (winner != TunnelMode.XRAY && results.containsKey(TunnelMode.XRAY)) cleanupXray()
+                            if (winner != TunnelMode.DNSTT && results.containsKey(TunnelMode.DNSTT)) cleanupDnstt()
+                            if (winner != TunnelMode.DNS && results.containsKey(TunnelMode.DNS)) cleanupDns()
+                            true
+                        } else {
+                            false
                         }
-                        // Cleanup losers
-                        if (winner != TunnelMode.XRAY && results.containsKey(TunnelMode.XRAY)) cleanupXray()
-                        if (winner != TunnelMode.DNSTT && results.containsKey(TunnelMode.DNSTT)) cleanupDnstt()
-                        if (winner != TunnelMode.DNS && results.containsKey(TunnelMode.DNS)) cleanupDns()
-                        true
-                    } else {
-                        false
                     }
                 }
             }
 
-            if (!connected) {
-                sendStatus(getString(R.string.status_error_tunnel), false)
+            if (connected != true) {
+                val reason = if (connected == null) "Connection timed out" else getString(R.string.status_error_tunnel)
+                Log.e(TAG, reason)
+                sendStatus(reason, false)
+                cleanupXray()
+                cleanupDnstt()
+                cleanupDns()
                 stopSelf()
                 return
             }
@@ -233,6 +279,7 @@ class MirageVpnService : VpnService() {
             establishVpn()
 
             isRunning = true
+            connectJob = null
             reconnectAttempts = 0
             isReconnecting = false
             sendStatus(getString(R.string.status_connected), true)
@@ -252,6 +299,14 @@ class MirageVpnService : VpnService() {
                 startBackgroundOptimizer()
             }
 
+        } catch (e: CancellationException) {
+            Log.i(TAG, "Connection cancelled")
+            cleanupXray()
+            cleanupDnstt()
+            cleanupDns()
+            sendStatus(getString(R.string.status_disconnected), false)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
         } catch (e: Exception) {
             Log.e(TAG, "Connection failed", e)
             sendStatus("${getString(R.string.status_error)}: ${e.message}", false)
@@ -291,17 +346,17 @@ class MirageVpnService : VpnService() {
         })
 
         // Probe for working config
-        sendStatus(getString(R.string.status_probing), false)
+        sendStatus(getString(R.string.status_probing), false, isConnecting = true)
         val probeSuccess = xrayManager?.quickProbe() ?: false
 
         if (!probeSuccess) {
-            sendStatus(getString(R.string.status_probe_failed), false)
+            sendStatus(getString(R.string.status_probe_failed), false, isConnecting = true)
             xrayManager = null
             return false
         }
 
         // Start Xray
-        sendStatus(getString(R.string.status_connecting), false)
+        sendStatus(getString(R.string.status_connecting), false, isConnecting = true)
         val started = xrayManager?.start() ?: false
 
         if (!started) {
@@ -363,11 +418,11 @@ class MirageVpnService : VpnService() {
             })
 
             // Probe for a working configuration first
-            sendStatus(getString(R.string.status_probing), false)
+            sendStatus(getString(R.string.status_probing), false, isConnecting = true)
             val probeSuccess = dohProxy?.probe() ?: false
 
             if (!probeSuccess) {
-                sendStatus(getString(R.string.status_probe_failed), false)
+                sendStatus(getString(R.string.status_probe_failed), false, isConnecting = true)
                 dohProxy?.stop()
                 dohProxy = null
                 return false
@@ -386,46 +441,49 @@ class MirageVpnService : VpnService() {
             return false
         }
 
-        // Try connecting with domain failover
-        var connected = false
-        var attempts = 0
-        val maxAttempts = activeDns.domains.size
+        // Try connecting with domain failover, with overall timeout
+        val result = withTimeoutOrNull(DNS_CONNECT_TIMEOUT_MS) {
+            var connected = false
+            var attempts = 0
+            val maxAttempts = activeDns.domains.size
 
-        while (!connected && attempts < maxAttempts) {
-            val currentDomain = dnsConfig!!.domain
-            Log.d(TAG, "Trying domain ${attempts + 1}/$maxAttempts: $currentDomain")
-            // Don't show technical details on screen - just "Connecting..."
-            sendStatus(getString(R.string.status_connecting), false)
+            while (!connected && attempts < maxAttempts) {
+                val currentDomain = dnsConfig!!.domain
+                Log.d(TAG, "Trying domain ${attempts + 1}/$maxAttempts: $currentDomain")
+                sendStatus(getString(R.string.status_connecting), false, isConnecting = true)
 
-            // Kill any existing tunnel process
-            tunnelProcess?.destroy()
-            tunnelProcess = null
+                // Kill any existing tunnel process
+                tunnelProcess?.destroy()
+                tunnelProcess = null
 
-            // Start the DNS tunnel client with current domain
-            startTunnelClient(binaryPath)
+                // Start the DNS tunnel client with current domain
+                startTunnelClient(binaryPath)
 
-            // Wait for tunnel to be ready
-            delay(3000)
+                // Wait for tunnel to be ready
+                delay(3000)
 
-            // Check if tunnel is working
-            if (isTunnelAlive()) {
-                connected = true
-                Log.d(TAG, "Successfully connected via $currentDomain")
-            } else {
-                Log.w(TAG, "Failed to connect via $currentDomain, trying next...")
-                attempts++
-                if (dnsConfig!!.hasMoreDomains()) {
-                    dnsConfig = dnsConfig!!.nextDomain()
+                // Check if tunnel is working
+                if (isTunnelAlive()) {
+                    connected = true
+                    Log.d(TAG, "Successfully connected via $currentDomain")
+                } else {
+                    Log.w(TAG, "Failed to connect via $currentDomain, trying next...")
+                    attempts++
+                    if (dnsConfig!!.hasMoreDomains()) {
+                        dnsConfig = dnsConfig!!.nextDomain()
+                    }
                 }
             }
+            connected
         }
 
-        if (!connected) {
+        if (result != true) {
+            Log.e(TAG, if (result == null) "DNS connection timed out" else "All DNS domains failed")
             dohProxy?.stop()
             dohProxy = null
         }
 
-        return connected
+        return result ?: false
     }
 
     private fun isSocksAlive(port: Int): Boolean {
@@ -571,36 +629,41 @@ class MirageVpnService : VpnService() {
             return false
         }
 
-        // Try configs in order (scored)
-        sendStatus(getString(R.string.status_probing), false)
-        for ((index, dnsttConfig) in configs.withIndex()) {
-            sendProbeProgress(index + 1, configs.size, dnsttConfig.name)
-            Log.d(TAG, "Trying dnstt config ${index + 1}/${configs.size}: ${dnsttConfig.name}")
+        // Try configs in order (scored) with overall timeout
+        sendStatus(getString(R.string.status_probing), false, isConnecting = true)
+        val result = withTimeoutOrNull(DNSTT_CONNECT_TIMEOUT_MS) {
+            for ((index, dnsttConfig) in configs.withIndex()) {
+                sendProbeProgress(index + 1, configs.size, dnsttConfig.name)
+                Log.d(TAG, "Trying dnstt config ${index + 1}/${configs.size}: ${dnsttConfig.name}")
 
-            // Kill any existing dnstt process
-            dnsttProcess?.destroy()
-            dnsttProcess = null
-
-            startDnsttClient(binaryPath, dnsttConfig)
-
-            // Wait for tunnel to be ready
-            delay(3000)
-
-            if (isSocksAlive(ServerConfig.DNSTT_SOCKS_PORT)) {
-                activeDnsttConfig = dnsttConfig
-                scoreManager?.recordSuccess(DnsttConfig.configId(dnsttConfig), 0)
-                Log.i(TAG, "dnstt connected via ${dnsttConfig.name}")
-                return true
-            } else {
-                Log.w(TAG, "dnstt config ${dnsttConfig.name} failed, trying next...")
-                scoreManager?.recordFailure(DnsttConfig.configId(dnsttConfig))
+                // Kill any existing dnstt process
                 dnsttProcess?.destroy()
                 dnsttProcess = null
+
+                startDnsttClient(binaryPath, dnsttConfig)
+
+                // Wait for tunnel to be ready
+                delay(3000)
+
+                if (isSocksAlive(ServerConfig.DNSTT_SOCKS_PORT)) {
+                    activeDnsttConfig = dnsttConfig
+                    scoreManager?.recordSuccess(DnsttConfig.configId(dnsttConfig), 0)
+                    Log.i(TAG, "dnstt connected via ${dnsttConfig.name}")
+                    return@withTimeoutOrNull true
+                } else {
+                    Log.w(TAG, "dnstt config ${dnsttConfig.name} failed, trying next...")
+                    scoreManager?.recordFailure(DnsttConfig.configId(dnsttConfig))
+                    dnsttProcess?.destroy()
+                    dnsttProcess = null
+                }
             }
+            false
         }
 
-        Log.e(TAG, "All dnstt configs failed")
-        return false
+        if (result != true) {
+            Log.e(TAG, if (result == null) "dnstt connection timed out" else "All dnstt configs failed")
+        }
+        return result ?: false
     }
 
     /**
@@ -743,6 +806,8 @@ class MirageVpnService : VpnService() {
             TunnelNative.stopService()
             startTun2Socks(newPort)
             activeSocksPort = newPort
+            // Update HTTP proxy upstream if running
+            httpProxyServer?.updateUpstreamPort(newPort)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to restart tun2socks", e)
         }
@@ -1067,10 +1132,71 @@ class MirageVpnService : VpnService() {
         }
     }
 
+    // ========== HTTP Proxy (Internet Sharing) ==========
+
+    private fun startHttpProxy() {
+        if (!isRunning) {
+            sendHttpProxyStatus(false, null)
+            return
+        }
+
+        val proxy = HttpProxyServer(activeSocksPort)
+        val port = proxy.start()
+        if (port < 0) {
+            Log.e(TAG, "Failed to start HTTP proxy")
+            sendHttpProxyStatus(false, null)
+            return
+        }
+
+        httpProxyServer = proxy
+        val wifiIp = getWifiIpAddress()
+        val address = if (wifiIp != null) "$wifiIp:$port" else "127.0.0.1:$port"
+        Log.i(TAG, "HTTP proxy started at $address")
+        sendHttpProxyStatus(true, address)
+    }
+
+    private fun stopHttpProxy() {
+        httpProxyServer?.stop()
+        httpProxyServer = null
+        sendHttpProxyStatus(false, null)
+    }
+
+    private fun sendHttpProxyStatus(running: Boolean, address: String?) {
+        val intent = Intent(ACTION_HTTP_PROXY_STATUS).apply {
+            setPackage(packageName)
+            putExtra(EXTRA_HTTP_PROXY_RUNNING, running)
+            if (address != null) putExtra(EXTRA_HTTP_PROXY_ADDRESS, address)
+        }
+        sendBroadcast(intent)
+    }
+
+    private fun getWifiIpAddress(): String? {
+        return try {
+            val connectivityManager = getSystemService(ConnectivityManager::class.java) ?: return null
+            val network = connectivityManager.activeNetwork ?: return null
+            val linkProperties = connectivityManager.getLinkProperties(network) ?: return null
+            linkProperties.linkAddresses
+                .map { it.address }
+                .firstOrNull { !it.isLoopbackAddress && it is java.net.Inet4Address }
+                ?.hostAddress
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to get WiFi IP: ${e.message}")
+            null
+        }
+    }
+
     // ========== Disconnect ==========
 
     private suspend fun disconnect() {
         isRunning = false
+
+        // Cancel any in-progress connection
+        connectJob?.cancel()
+        connectJob = null
+
+        // Stop HTTP proxy
+        httpProxyServer?.stop()
+        httpProxyServer = null
 
         // Stop health monitor and optimizer
         healthMonitorJob?.cancel()
@@ -1116,12 +1242,13 @@ class MirageVpnService : VpnService() {
         stopSelf()
     }
 
-    private fun sendStatus(status: String, connected: Boolean) {
-        Log.d(TAG, "Sending status: $status, connected: $connected")
+    private fun sendStatus(status: String, connected: Boolean, isConnecting: Boolean = false) {
+        Log.d(TAG, "Sending status: $status, connected: $connected, isConnecting: $isConnecting")
         val intent = Intent(ACTION_STATUS_UPDATE).apply {
             setPackage(packageName)
             putExtra(EXTRA_STATUS, status)
             putExtra(EXTRA_CONNECTED, connected)
+            putExtra(EXTRA_IS_CONNECTING, isConnecting)
         }
         sendBroadcast(intent)
     }
@@ -1172,6 +1299,10 @@ class MirageVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        connectJob?.cancel()
+        connectJob = null
+        httpProxyServer?.stop()
+        httpProxyServer = null
         healthMonitorJob?.cancel()
         backgroundOptimizer?.stop()
         backgroundOptimizer = null

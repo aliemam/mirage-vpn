@@ -34,6 +34,8 @@ class XrayManager(
         private const val KEY_CACHED_TIMESTAMP = "cached_timestamp"
         private const val CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000L // 24 hours
         private const val TEST_TIMEOUT_MS = 10_000L
+        private const val QUICK_PROBE_TIMEOUT_MS = 30_000L
+        private const val FULL_PROBE_TIMEOUT_MS = 60_000L
         private const val PARALLEL_BATCH_SIZE = 5
     }
 
@@ -346,44 +348,54 @@ class XrayManager(
 
     /**
      * Quick probe - try cached config first, then race all quick configs in parallel.
-     * Total worst case: ~10s (vs 140s sequential).
+     * Timeout: 30s overall. Falls back to full probe on failure.
      */
     suspend fun quickProbe(): Boolean = withContext(Dispatchers.IO) {
         initXray()
 
-        // Step 1: Try cached config
-        val cached = loadCachedConfig()
-        if (cached != null) {
-            Log.i(TAG, "Testing cached config: ${cached.name}")
-            probeListener?.onProbeProgress(0, 1, "cached: ${cached.name}")
+        val result = withTimeoutOrNull(QUICK_PROBE_TIMEOUT_MS) {
+            // Step 1: Try cached config
+            val cached = loadCachedConfig()
+            if (cached != null) {
+                Log.i(TAG, "Testing cached config: ${cached.name}")
+                probeListener?.onProbeProgress(0, 1, "cached: ${cached.name}")
 
-            val testPort = (50000..60000).random()
-            val delay = testConfigWithTimeout(cached, testPort)
-            if (delay > 0) {
-                Log.i(TAG, "Cached config still works: ${cached.name} (${delay}ms)")
-                workingConfig = cached
-                probeListener?.onProbeSuccess(cached)
-                return@withContext true
+                val testPort = (50000..60000).random()
+                val delay = testConfigWithTimeout(cached, testPort)
+                if (delay > 0) {
+                    Log.i(TAG, "Cached config still works: ${cached.name} (${delay}ms)")
+                    workingConfig = cached
+                    probeListener?.onProbeSuccess(cached)
+                    return@withTimeoutOrNull true
+                }
+                Log.i(TAG, "Cached config failed, trying quick probe")
             }
-            Log.i(TAG, "Cached config failed, trying quick probe")
+
+            // Step 2: Race all quick configs in parallel (use repository if available)
+            val configs = if (configRepository != null && scoreManager != null) {
+                configRepository.getQuickProbeConfigs(scoreManager)
+            } else {
+                emptyList()
+            }
+            Log.i(TAG, "Quick probe: racing ${configs.size} configs in parallel")
+            probeListener?.onProbeProgress(1, configs.size, configs.firstOrNull()?.name ?: "...")
+
+            val winner = raceConfigs(configs)
+            if (winner != null) {
+                Log.i(TAG, "Quick probe SUCCESS: ${winner.name}")
+                workingConfig = winner
+                saveCachedConfig(winner)
+                probeListener?.onProbeSuccess(winner)
+                return@withTimeoutOrNull true
+            }
+
+            false
         }
 
-        // Step 2: Race all quick configs in parallel (use repository if available)
-        val configs = if (configRepository != null && scoreManager != null) {
-            configRepository.getQuickProbeConfigs(scoreManager)
-        } else {
-            emptyList()
-        }
-        Log.i(TAG, "Quick probe: racing ${configs.size} configs in parallel")
-        probeListener?.onProbeProgress(1, configs.size, configs.firstOrNull()?.name ?: "...")
+        if (result == true) return@withContext true
 
-        val winner = raceConfigs(configs)
-        if (winner != null) {
-            Log.i(TAG, "Quick probe SUCCESS: ${winner.name}")
-            workingConfig = winner
-            saveCachedConfig(winner)
-            probeListener?.onProbeSuccess(winner)
-            return@withContext true
+        if (result == null) {
+            Log.w(TAG, "Quick probe timed out after ${QUICK_PROBE_TIMEOUT_MS}ms")
         }
 
         // Step 3: Fall back to full probe
@@ -393,31 +405,40 @@ class XrayManager(
 
     /**
      * Full probe - process configs in batches of 5 in parallel.
-     * Total worst case: ~120s (vs 1200s sequential). Max 60 configs.
+     * Timeout: 60s overall. Max 25 configs.
      */
     suspend fun probe(): Boolean = withContext(Dispatchers.IO) {
         initXray()
 
         val configs = configRepository?.getAllConfigs() ?: emptyList()
-        val total = configs.size.coerceAtMost(60)
+        val total = configs.size.coerceAtMost(25)
         val batches = configs.take(total).chunked(PARALLEL_BATCH_SIZE)
 
         Log.i(TAG, "Starting full Xray probe: $total configs in ${batches.size} batches")
 
-        var testedCount = 0
-        for ((batchIndex, batch) in batches.withIndex()) {
-            testedCount += batch.size
-            val batchNames = batch.joinToString(", ") { it.name }
-            probeListener?.onProbeProgress(testedCount, total, batchNames)
+        val result = withTimeoutOrNull(FULL_PROBE_TIMEOUT_MS) {
+            var testedCount = 0
+            for ((batchIndex, batch) in batches.withIndex()) {
+                testedCount += batch.size
+                val batchNames = batch.joinToString(", ") { it.name }
+                probeListener?.onProbeProgress(testedCount, total, batchNames)
 
-            val winner = raceConfigs(batch)
-            if (winner != null) {
-                Log.i(TAG, "Full probe SUCCESS in batch ${batchIndex + 1}: ${winner.name}")
-                workingConfig = winner
-                saveCachedConfig(winner)
-                probeListener?.onProbeSuccess(winner)
-                return@withContext true
+                val winner = raceConfigs(batch)
+                if (winner != null) {
+                    Log.i(TAG, "Full probe SUCCESS in batch ${batchIndex + 1}: ${winner.name}")
+                    workingConfig = winner
+                    saveCachedConfig(winner)
+                    probeListener?.onProbeSuccess(winner)
+                    return@withTimeoutOrNull true
+                }
             }
+            false
+        }
+
+        if (result == true) return@withContext true
+
+        if (result == null) {
+            Log.w(TAG, "Full probe timed out after ${FULL_PROBE_TIMEOUT_MS}ms")
         }
 
         Log.e(TAG, "No working config found")

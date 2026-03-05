@@ -26,5 +26,13 @@
 
     <string name="status_probing_detail">Testing server %1$d of %2$d</string>
 
+    <string name="cancel">Cancel</string>
+    <string name="protocol_vless">VLESS</string>
+    <string name="protocol_vmess">VMess</string>
+    <string name="protocol_dnstt">dnstt</string>
+    <string name="share_internet">Share Internet</string>
+    <string name="proxy_address">Proxy: %1$s</string>
+    <string name="proxy_wifi_required">Connect to WiFi to share</string>
+
     <string name="info_text">Your traffic is encrypted and routed through secure tunnels to bypass restrictions.</string>
 </resources>
